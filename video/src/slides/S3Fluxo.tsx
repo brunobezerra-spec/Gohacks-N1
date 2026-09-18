@@ -41,7 +41,7 @@ const PASSOS = [
 ];
 
 const Passo: React.FC<{ i: number; t: string; d: string }> = ({ i, t, d }) => {
-  const r = useRise(70 + i * 16, 14);
+  const r = useRise(38 + i * 11, 14);
   return (
     <div style={{ display: "flex", gap: 16, alignItems: "flex-start", ...r }}>
       <div
@@ -62,7 +62,7 @@ const Passo: React.FC<{ i: number; t: string; d: string }> = ({ i, t, d }) => {
 };
 
 const Destino: React.FC<{ d: (typeof DESTINOS)[number]; i: number }> = ({ d, i }) => {
-  const delay = 156 + i * 14;
+  const delay = 82 + i * 11;
   const r = useRise(delay + 4, 0);
   return (
     <>
@@ -91,9 +91,9 @@ export const S3Fluxo: React.FC = () => {
   const frame = useCurrentFrame();
   const head = useRise(2);
   const badge = useRise(10);
-  const origem = useRise(26);
-  const motor = useRise(44);
-  const spine = interpolate(frame, [138, 158], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const origem = useRise(16);
+  const motor = useRise(28);
+  const spine = interpolate(frame, [72, 88], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const spineTop = centerY(0);
   const spineH = centerY(3) - spineTop;
 
@@ -126,7 +126,7 @@ export const S3Fluxo: React.FC = () => {
         <div style={{ color: "#3c4a5e", fontSize: 16, fontWeight: 500, marginTop: 6 }}>pedidos parados</div>
         <div style={{ color: C.red, fontSize: 22, fontWeight: 700, marginTop: 12 }}>R$ 64,8 mi</div>
       </Card>
-      <Arrow x={356} y={630} w={78} color={C.blue} delay={38} />
+      <Arrow x={356} y={630} w={78} color={C.blue} delay={24} />
 
       {/* motor */}
       <div
@@ -157,7 +157,7 @@ export const S3Fluxo: React.FC = () => {
       </div>
 
       {/* divisor */}
-      <Arrow x={1016} y={630} w={40} color={C.blue} delay={128} thickness={5} />
+      <Arrow x={1016} y={630} w={40} color={C.blue} delay={68} thickness={5} />
       <div
         style={{
           position: "absolute", left: SPINE_X, top: spineTop + (spineH / 2) * (1 - spine),

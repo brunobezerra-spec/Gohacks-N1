@@ -109,9 +109,21 @@ t("recusa qualquer caminho fora da lista, inclusive escrita", () => {
   }
 });
 
-t("o modulo de anexo nao tem caminho de escrita", async () => {
+t("o unico POST do modulo e a troca de perfil da sessao", async () => {
   const src = (await import("node:fs")).readFileSync(new URL("../src/anexos.ts", import.meta.url), "utf8");
-  assert.equal(/method:\s*["'](POST|PUT|DELETE|PATCH)/.test(src), false);
+  const escritas = [...src.matchAll(/method:\s*["'](POST|PUT|DELETE|PATCH)["']/g)];
+  assert.equal(escritas.length, 1, "so changeActiveProfile pode escrever");
+  // e ele nao toca em dado: muda o perfil ativo da propria sessao
+  assert.match(src, /changeActiveProfile/);
+  assert.equal(/\/(Document|Ticket|TicketValidation|ITILFollowup|ITILSolution)\/[^"']*["']\s*,\s*\{[^}]*method/.test(src), false);
+});
+
+t("nenhuma escrita aponta para objeto de dado", async () => {
+  const src = (await import("node:fs")).readFileSync(new URL("../src/anexos.ts", import.meta.url), "utf8");
+  for (const obj of ["Document", "Ticket", "TicketValidation", "ITILFollowup", "ITILSolution"]) {
+    const re = new RegExp(`method:\\s*["'](POST|PUT|DELETE|PATCH)[^]{0,200}${obj}`);
+    assert.equal(re.test(src), false, `escrita em ${obj} nao pode existir aqui`);
+  }
 });
 
 

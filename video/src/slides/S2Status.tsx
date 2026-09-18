@@ -15,16 +15,17 @@ const Metric: React.FC<{ value: React.ReactNode; label: string; delay: number; c
 
 export const S2Status: React.FC = () => {
   const head = useRise(2);
-  const parados = useCount(1071, 16, 34);
-  const valor = useCount(64.8, 16, 34, 1);
-  const dias = useCount(91, 26, 30);
-  const taxa = useCount(99.15, 36, 30, 2);
-  const quote = useRise(96);
-  const why = useRise(112);
+  const parados = useCount(1071, 10, 26);
+  const valor = useCount(64.8, 10, 26, 1);
+  const dias = useCount(91, 16, 24);
+  const taxa = useCount(99.15, 22, 24, 2);
+  const quote = useRise(50);
+  const why = useRise(62);
+  const prova = useRise(74);
 
   return (
     <Frame inner={C.off} border={C.blue} dots={C.blue} pill={null}>
-      <div style={{ position: "absolute", inset: 0, padding: "78px 92px 72px", display: "flex", flexDirection: "column" }}>
+      <div style={{ position: "absolute", inset: 0, padding: "72px 92px 64px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
         <div style={head}>
           <Eyebrow color={C.blue}>Status hoje · GoService / GLPI · 18.966 registros</Eyebrow>
           <Title color={C.blue} size={64} style={{ marginTop: 16 }}>
@@ -32,14 +33,14 @@ export const S2Status: React.FC = () => {
           </Title>
         </div>
 
-        <div style={{ display: "flex", gap: 20, marginTop: 44 }}>
+        <div style={{ display: "flex", gap: 20 }}>
           <Metric delay={14} value={parados} label="pedidos parados na fila" />
           <Metric delay={22} value={<>R$ {valor} mi</>} label="de dinheiro parado" color={C.red} />
           <Metric delay={30} value={<>{dias} d</>} label="mediana parada (mais antigo: 352)" />
           <Metric delay={38} value={<>{taxa}%</>} label="de aprovação entre os decididos" color={C.red} />
         </div>
 
-        <Card bg={C.blue} style={{ marginTop: 26, padding: "30px 34px", ...quote }}>
+        <Card bg={C.blue} style={{ padding: "32px 36px", ...quote }}>
           <Eyebrow>O que o aprovador vê antes de assinar</Eyebrow>
           <div
             style={{
@@ -54,7 +55,7 @@ export const S2Status: React.FC = () => {
           </div>
         </Card>
 
-        <div style={{ display: "flex", gap: 20, marginTop: 22, ...why }}>
+        <div style={{ display: "flex", gap: 20, ...why }}>
           {[
             ["16,5 h", "é a mediana para decidir quando alguém decide"],
             ["106", "tickets de teste na fila — 23 já foram aprovados"],
@@ -64,6 +65,21 @@ export const S2Status: React.FC = () => {
               <Stat value={v} label={l} color={C.blue} labelColor="#3c4a5e" size={40} />
             </Card>
           ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 20, ...prova }}>
+          <Card bg={C.red} style={{ flex: 1, padding: "24px 28px" }}>
+            <Eyebrow color={C.white} style={{ fontSize: 15 }}>O que o carimbo deixou passar</Eyebrow>
+            <div style={{ color: C.white, fontSize: 25, fontWeight: 700, marginTop: 10, lineHeight: 1.25 }}>
+              37 cadastros com CNPJ ou CPF que reprova no dígito verificador já receberam 162 pagamentos
+            </div>
+          </Card>
+          <Card bg={C.blue} style={{ flex: 1, padding: "24px 28px" }}>
+            <Eyebrow style={{ fontSize: 15 }}>SEFAZ de São Paulo</Eyebrow>
+            <div style={{ color: C.white, fontSize: 25, fontWeight: 700, marginTop: 10, lineHeight: 1.25 }}>
+              O mesmo órgão com 3 grafias de CNPJ, 2 inválidas: 88 pagamentos aprovados contra elas
+            </div>
+          </Card>
         </div>
       </div>
     </Frame>

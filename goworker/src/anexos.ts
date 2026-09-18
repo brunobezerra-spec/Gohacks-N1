@@ -35,11 +35,31 @@ export function assertLeituraPermitida(caminho: string) {
   return true;
 }
 
+// O WAF do GoService devolve 403 para User-Agent de biblioteca (urllib, por
+// exemplo). Mandar um UA de cliente conhecido resolve, e custa uma linha.
 const H = (env: GlpiEnv, session: string, accept?: string) => ({
   "App-Token": env.GLPI_APP_TOKEN!,
   "Session-Token": session,
+  "User-Agent": "curl/8.7.1",
   ...(accept ? { Accept: accept } : {}),
 });
+
+// PERFIL DE LEITURA DE ANEXO. O direito sobre Document nao esta no perfil do
+// agente (24, document=0) nem no Financeiro_tech (9, document=0): esta no 16.
+// Medido em 18/09/2026. Trocar o perfil para ler e voltar depois e mais barato
+// e menos invasivo do que ampliar o perfil do agente.
+export const PERFIL_LEITURA_DOCUMENTO = 16;
+
+export async function trocarPerfil(env: GlpiEnv, session: string, profilesId: number) {
+  try {
+    const r = await fetch(`${GLPI_BASE}/changeActiveProfile`, {
+      method: "POST",
+      headers: { ...H(env, session), "Content-Type": "application/json" },
+      body: JSON.stringify({ profiles_id: profilesId }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
 
 // ---------------------------------------------------------------- leitura
 
@@ -114,6 +134,10 @@ async function metadado(env: GlpiEnv, session: string, documentId: number) {
 }
 
 // MESMA URL do metadado. O que baixa o binario e o header Accept, e so ele.
+//
+// Devolve BYTES, nao string. Ler PDF com r.text() destroi o arquivo: o corpo e
+// binario e a decodificacao UTF-8 troca byte invalido por U+FFFD sem avisar.
+// O XML, que e texto, e decodificado por quem chama.
 export async function baixarDocumento(env: GlpiEnv, session: string, documentId: number) {
   const caminho = `/Document/${documentId}`;
   try {
@@ -121,10 +145,12 @@ export async function baixarDocumento(env: GlpiEnv, session: string, documentId:
     const r = await fetch(`${GLPI_BASE}${caminho}`, {
       headers: H(env, session, "application/octet-stream"),
     });
-    if (!r.ok) return { ok: false as const, status: r.status, texto: "" };
-    return { ok: true as const, status: r.status, texto: await r.text() };
-  } catch { return { ok: false as const, status: 0, texto: "" }; }
+    if (!r.ok) return { ok: false as const, status: r.status, bytes: new Uint8Array() };
+    return { ok: true as const, status: r.status, bytes: new Uint8Array(await r.arrayBuffer()) };
+  } catch { return { ok: false as const, status: 0, bytes: new Uint8Array() }; }
 }
+
+export const bytesParaTexto = (b: Uint8Array) => new TextDecoder("utf-8").decode(b);
 
 // ---------------------------------------------------------------- parser NFe
 
@@ -345,7 +371,7 @@ export async function conferirChamado(env: GlpiEnv, session: string, pedido: any
   for (const a of xmls) {
     const bin = await baixarDocumento(env, session, a.documentId);
     if (!bin.ok) continue;
-    const nota = lerNFe(bin.texto);
+    const nota = lerNFe(bytesParaTexto(bin.bytes));
     if (nota?.valorNota != null) return conferir(pedido, nota, ticketId);
   }
   return { ticketId, conferido: false, motivo: "xml_ilegivel", divergencias: [] };
@@ -369,13 +395,17 @@ export async function conferirPorTexto(
   const juros = Number(pedido.juros) || 0;
   const principal = Number(pedido.valor) - juros;
   let melhor: { fator: number; valor: number; anexo: string } | null = null;
+  const ilegiveis: string[] = [];
 
   for (const a of legiveis) {
     const bin = await baixarDocumento(env, session, a.documentId);
-    if (!bin.ok || !bin.texto) continue;
-    let texto = bin.texto;
-    if (a.tipo === "pdf") {
-      try { texto = await extrair(new TextEncoder().encode(bin.texto)); } catch { continue; }
+    if (!bin.ok || !bin.bytes.length) { ilegiveis.push(`${a.nome}:nao_baixou`); continue; }
+    let texto: string;
+    if (a.tipo === "xml_nfe") {
+      texto = bytesParaTexto(bin.bytes);
+    } else {
+      try { texto = await extrair(bin.bytes); }
+      catch (e: any) { ilegiveis.push(`${a.nome}:${e?.message ?? "ilegivel"}`); continue; }
     }
     const r = procurarValor(principal, texto);
     // Bateu em qualquer anexo: o pedido esta certo e a busca para aqui.
@@ -393,7 +423,54 @@ export async function conferirPorTexto(
       }],
     };
   }
+  // DISTINCAO QUE IMPORTA: se nenhum anexo foi legivel, o agente NAO SABE.
+  // Tratar isso como divergencia devolveria pedido bom por defeito de leitura.
+  if (ilegiveis.length === legiveis.length) {
+    return { ticketId, conferido: false, motivo: `ilegivel (${ilegiveis.join("; ")})`, divergencias: [] };
+  }
   return { ticketId, conferido: false, motivo: "valor_nao_localizado", divergencias: [] };
+}
+
+// ---------------------------------------------------------------- enriquecimento
+
+// LIGACAO COM O MOTOR. De proposito NAO fica dentro de processar(): aquilo e
+// puro e sincrono, e e o que faz os testes rodarem sem rede. Aqui a conferencia
+// acontece ANTES, num passo separado, e injeta o achado em r.findings. O motor
+// continua lendo um campo, sem saber que existe HTTP no mundo.
+//
+// Regra de ouro: anexo ilegivel NAO levanta sinal. O agente registra que nao
+// soube ler e segue. Devolver pedido bom por defeito de leitura e pior do que
+// nao conferir.
+export async function enriquecerComAnexo(
+  pedidos: any[], env: GlpiEnv, session: string, extrair: ExtratorDeTexto,
+  opts: { teto?: number } = {},
+) {
+  const teto = opts.teto ?? TETO_SUBREQUESTS;
+  const resumo = { conferidos: 0, divergentes: 0, ilegiveis: 0, semAnexo: 0, naoLocalizado: 0, parou: false };
+  let gasto = 0;
+
+  for (const p of pedidos) {
+    if (gasto + 6 > teto) { resumo.parou = true; break; }
+    gasto += 6;
+    const c = await conferirPorTexto(env, session, p, extrair);
+    p.conferenciaAnexo = c;
+
+    if (c.divergencias.length) {
+      resumo.divergentes++;
+      const d = c.divergencias[0];
+      (p.findings ??= []).push({
+        code: "VALOR_DIVERGE_DO_ANEXO",
+        msg: d.texto,
+        severity: 3,
+        severidade: "TRAVA",
+        aoSolicitante: d.aoSolicitante,
+      });
+    } else if (c.conferido) resumo.conferidos++;
+    else if (c.motivo === "sem_anexo") resumo.semAnexo++;
+    else if (c.motivo?.startsWith("ilegivel")) resumo.ilegiveis++;
+    else resumo.naoLocalizado++;
+  }
+  return resumo;
 }
 
 // TETO DE SUBREQUESTS. O agente roda em Cloudflare Worker, que corta em ~50

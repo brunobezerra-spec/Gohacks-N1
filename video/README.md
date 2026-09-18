@@ -1,45 +1,54 @@
-# Deck em vídeo do Goworker do Financeiro
+# Deck: Goworker do Financeiro
 
-Apresentação de 3 minutos do projeto, em [Remotion](https://remotion.dev). 1920x1080 a 30fps,
-no padrão visual do Brandbook Gogroup 2026.
-
-## Rodar
+Deck de 5 slides em Remotion, para apresentar ao vivo em ~3 minutos.
+1920x1080, padrão de marca Gogroup.
 
 ```bash
-npm install
-npm run dev      # abre o Remotion Studio
-npm run build    # bundle
-npm run lint     # eslint + tsc
+npm run deck          # abre o deck em http://localhost:5188 — é isso que você apresenta
+npm run deck:build    # deck estático em dist-deck/ (pode abrir em qualquer máquina)
 ```
 
-Renderizar o deck inteiro ou um slide isolado:
+**Teclas:** `→` avança · `←` volta · `R` repete a animação de entrada ·
+`F` tela cheia · `1`-`5` pula para o slide. Clicar na tela também avança.
+A barra de navegação some sozinha depois de 2,5 s.
+
+Cada slide monta seus elementos em ~2 a 4 s ao chegar nele, e depois fica parado.
+
+## Slides
+
+| # | conteúdo |
+|---|---|
+| 1 | Hook: transformar o financeiro em IA First |
+| 2 | Status: a aprovação de pagamento virou carimbo |
+| 3 | O que o Goworker faz — fluxo e os 4 destinos |
+| 4 | Antes x depois no GoService |
+| 5 | Resultados e próximos passos |
+
+## Outros formatos (opcional)
 
 ```bash
-npx remotion render Deck out/goworker.mp4
-npx remotion render Slide-3 out/slide3.png --frame=200
+npm run studio                                  # editor do Remotion
+npm run render                                  # MP4 de 3 min (out/)
+npx remotion still Slide-3 out/slide-3.png --frame=400   # PNG de um slide
 ```
+
+## De onde vem cada número
+
+Rodando `enrich → analyze → processarFila` do `goworker/` sobre o snapshot de
+18/09/2026 (18.966 registros), mais os commits de execução real:
+
+- 1.071 pendentes · R$ 64,8 mi parados (946 pedidos com valor legível)
+- Destinos: encaminhar 222 · rotear 125 · devolver 18 · descartar 706 (593 lixeira + 113 encerrar)
+- 849 pedidos (79%) não consomem aprovador
+- 748 ações gravadas no GoService (commit `3929290`); 234 roteamentos por alçada
 
 ## Estrutura
 
-| Arquivo | O que é |
-|---|---|
-| `src/theme.ts` | tokens da marca e a duração de cada slide. Não inventar cor nem fonte fora daqui |
-| `src/Deck.tsx` | monta os 5 slides em sequência, com corte de 12 frames só em opacidade |
-| `src/Root.tsx` | registra a composição `Deck` e uma por slide, para ensaiar isolado |
-| `src/ui/kit.tsx` | componentes compartilhados |
-| `src/slides/` | um arquivo por slide |
-
-## Os cinco slides
-
-| # | Slide | Duração |
-|---|---|---|
-| 1 | `S1Hook` | 25s |
-| 2 | `S2Status` | 36s |
-| 3 | `S3Fluxo` | 51s |
-| 4 | `S4AntesDepois` | 36s |
-| 5 | `S5Proximos` | 32s |
-
-Cada slide também é uma composição própria (`Slide-1` a `Slide-5`), para ensaiar um só ou
-exportar PNG dele sem renderizar o deck inteiro.
-
-A transição entre slides é só opacidade, de propósito: a marca não usa transição decorada.
+```
+src/theme.ts        cores da marca, fonte, duração de cada slide
+src/fonts.ts        Poppins via delayRender (sem isso o fallback Arial passa calado)
+src/ui/kit.tsx      moldura de janela, cards, stats, setas de fluxo
+src/slides/         um arquivo por slide
+src/deck/           o apresentador (Remotion Player + teclado)
+src/Root.tsx        composições para render de vídeo e PNG
+```

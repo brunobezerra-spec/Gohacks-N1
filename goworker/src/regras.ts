@@ -102,6 +102,15 @@ export const REGRAS: Record<string, Regra> = {
     nota: "Acusa o sistema, nao quem preencheu: as pessoas escrevem o valor no titulo porque o " +
           "campo nao era legivel. A demanda de produto e parte da regra.",
   },
+  VALOR_DIVERGE_DO_ANEXO: {
+    sinal: "VALOR_DIVERGE_DO_ANEXO", ativo: true, severidade: "TRAVA",
+    acoes: ["DEVOLVER_AO_SOLICITANTE"], base: "CAP Art. 6",
+    nota: "A unica regra do motor que confere o valor contra a FONTE, e nao contra o historico. " +
+          "So dispara quando o documento anexado foi lido de verdade: anexo ilegivel devolve " +
+          "'nao sei' e nao levanta o sinal, porque devolver pedido bom por defeito de leitura " +
+          "e pior do que nao conferir. Medido em 18/09/2026: dos 8 chamados testados ao vivo, " +
+          "6 tinham o valor do pedido 100x o do anexo.",
+  },
 
   // ---- desligados em 18/09/2026 ("remover da lista")
   BENEFICIARIO_NOVO:        { sinal: "BENEFICIARIO_NOVO", ativo: false, textoRevisor: "remover da lista" },

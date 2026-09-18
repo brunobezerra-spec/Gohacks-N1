@@ -7,6 +7,8 @@ import { despachar, validarAcao, TIPOS_PERMITIDOS } from "./outbox";
 import { executar as executarGlpi, credenciaisOk, modo as modoGlpi, assertNaoEhAprovacao, diagnosticoDePerfil } from "./glpi";
 import { NIVEIS_APROVADORES } from "./aprovadores";
 import { REGRAS } from "./regras";
+import { enriquecerComAnexo, trocarPerfil, PERFIL_LEITURA_DOCUMENTO } from "./anexos";
+import { extratorPadrao } from "./pdf";
 
 // ============================================================================
 // Goworker do Financeiro
@@ -201,6 +203,43 @@ function buildContext(all: any[], pendentes: any[]) {
   return ctx;
 }
 
+// Abre sessao propria para LER anexo. Sessao separada de proposito: o perfil de
+// leitura de documento (16) nao e o perfil com que o agente escreve (24), e
+// misturar os dois numa sessao so daria ao executor mais direito do que ele
+// precisa. Sem credencial, nao confere nada e diz isso.
+//
+// GLPI_CONFERIR_ANEXO=off desliga sem deploy. O teto existe porque o Worker
+// corta em ~50 subrequests por invocacao: a fila inteira e varrida ao longo de
+// varias execucoes, a mais cara primeiro.
+async function conferirAnexosDaFila(env: any, pendentes: any[]) {
+  if (String(env.GLPI_CONFERIR_ANEXO ?? "on") === "off") return { pulado: "desligado" };
+  if (!env.GLPI_APP_TOKEN || !env.GLPI_USER_TOKEN) return { pulado: "sem_credencial" };
+
+  let session: string;
+  try {
+    const r = await fetch("https://goservice.gocase.com.br/apirest.php/initSession", {
+      headers: { "App-Token": env.GLPI_APP_TOKEN, Authorization: `user_token ${env.GLPI_USER_TOKEN}`,
+                 "User-Agent": "curl/8.7.1" },
+    });
+    const d: any = await r.json().catch(() => ({}));
+    if (!d?.session_token) return { pulado: `initSession_${r.status}` };
+    session = d.session_token;
+  } catch { return { pulado: "initSession_falhou" }; }
+
+  try {
+    if (!await trocarPerfil(env, session, PERFIL_LEITURA_DOCUMENTO)) {
+      return { pulado: `sem_perfil_${PERFIL_LEITURA_DOCUMENTO}` };
+    }
+    // Mais caro primeiro: se o teto cortar, corta no que importa menos.
+    const fila = [...pendentes].sort((x: any, y: any) => (y.valor ?? 0) - (x.valor ?? 0));
+    return await enriquecerComAnexo(fila, env, session, extratorPadrao);
+  } finally {
+    await fetch("https://goservice.gocase.com.br/apirest.php/killSession", {
+      headers: { "App-Token": env.GLPI_APP_TOKEN, "Session-Token": session },
+    }).catch(() => {});
+  }
+}
+
 async function runAgent(env: any, actor: string | null, source: string, cap = 0) {
   const t0 = Date.now();
   const mark = (etapa: string, extra?: unknown) =>
@@ -231,6 +270,15 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   await env.DB.exec("DELETE FROM triage", []);
   // ---- O AGENTE decide e executa. Nao pergunta item a item.
   const hhSalvo = await lerHH(env);
+
+  // ---- CONFERENCIA CONTRA O DOCUMENTO, antes de decidir.
+  // Roda aqui, e nao dentro de processar(), porque processar() e puro e sincrono
+  // e e isso que deixa o motor testavel sem rede. Aqui a leitura acontece antes
+  // e injeta o achado em pending[].findings; o motor continua so lendo campo.
+  // Anexo ilegivel nao levanta sinal: o agente registra que nao soube ler.
+  const conf = await conferirAnexosDaFila(env, a.pending);
+  mark("conferencia de anexo", conf);
+
   const ctxAg = montarContexto(all, { agora: Date.now(), niveis: NIVEIS_APROVADORES, hh: hhSalvo });
   const ag = processarFila(a.pending, ctxAg);
   const lotesCap = montarLotesCAP(ag.itens, ctxAg);

@@ -8,9 +8,9 @@ export const S1Hook: React.FC = () => {
   const logo = useRise(4);
   const eyebrow = useRise(14);
   const title = useRise(22);
-  const rule = interpolate(frame, [40, 62], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const claim = useRise(64);
-  const foot = useRise(86);
+  const rule = interpolate(frame, [30, 46], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const claim = useRise(46);
+  const foot = useRise(60);
 
   return (
     <Frame>

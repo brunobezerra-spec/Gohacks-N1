@@ -96,6 +96,9 @@ const AO_SOLICITANTE: Record<string, string> = {
   CPF_INVALIDO: "O CPF informado reprova no digito verificador.",
   NOME_DIVERGE_DO_CNPJ: "O nome do favorecido nao bate com o historico deste CNPJ. Confirme o cadastro com Compras/Supply.",
   FILA_ZUMBI: "Este pedido esta parado ha muito tempo. Confirme se ainda e devido.",
+  // Este sinal traz a mensagem pronta do proprio anexo (com o valor lido), entao
+  // o texto abaixo so aparece se a leitura nao tiver dito nada.
+  VALOR_DIVERGE_DO_ANEXO: "O valor informado nao bate com o documento anexado ao chamado. Confira o valor e a virgula.",
 };
 
 // O agente le DUAS fontes: as violacoes de politica (policy.ts) e os sinais do
@@ -115,7 +118,10 @@ function unificarAchados(r: any, pol: any) {
       foraDaJanela: Boolean(f.foraDaJanela),
       janelaDias: f.janelaDias ?? janelaDe(f.code),
       corrigivel: false,
-      aoSolicitante: AO_SOLICITANTE[f.code] ?? f.msg,
+      // O sinal pode trazer a propria mensagem. VALOR_DIVERGE_DO_ANEXO precisa
+      // disso: o texto util carrega o valor lido no documento, que so existe em
+      // tempo de execucao e nao cabe numa tabela estatica.
+      aoSolicitante: f.aoSolicitante ?? AO_SOLICITANTE[f.code] ?? f.msg,
     }));
   // As violacoes de politica tambem passam pelo registro.
   const daPolitica = pol.violacoes.map((v: any) => ({
@@ -158,6 +164,17 @@ export function processar(r: any, ctx: any) {
   } else if (regras.has("AUTOAPROVACAO")) {
     acao = "ROTEAR";
     porque = "Solicitante e aprovador sao a mesma pessoa. O Art. 4 chama segregacao de funcoes de regra inviolavel e o Art. 7 diz que em nenhuma hipotese o solicitante pode ser o proprio aprovador. Nao vai para a lixeira mesmo estando parado: a quebra tem que ser vista.";
+
+  // 2b. MESMA COLISAO, mesma resolucao. Divergencia de valor contra o anexo e o
+  //     unico sinal que compara o pedido com a FONTE, e nasce de um documento
+  //     lido, nao de inferencia. Mandar isso para a lixeira por estar parado
+  //     apagaria a prova: no chamado 6548 o pedido diz R$ 18.730.946,00 e o
+  //     anexo diz R$ 187.309,46, e ele e o mais antigo da fila. Volta para o
+  //     solicitante corrigir, porque o valor certo so ele registra.
+  } else if (regras.has("VALOR_DIVERGE_DO_ANEXO")) {
+    acao = "DEVOLVER";
+    porque = sev("VALOR_DIVERGE_DO_ANEXO")?.texto
+      ?? "O valor do pedido nao bate com o documento anexado ao chamado.";
 
   // 3. Regra 1: fila zumbi sai inteira da base de trabalho, para uma lixeira
   //    restauravel. Sem corte de dias, sem aprovacao em lote, porque e
