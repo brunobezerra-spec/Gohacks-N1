@@ -82,9 +82,21 @@ footer{padding:18px 24px 40px;color:var(--faint);font-size:12px;max-width:1400px
 <header>
   <h1>Goworker do Financeiro</h1>
   <span class="tag" id="run">carregando</span>
-  <span class="mote">Assume a fila. Nunca assume a assinatura.</span>
+  <span class="mote">O primeiro funcionário de IA do financeiro. Assume a fila, nunca a assinatura.</span>
 </header>
 <main>
+  <h2 style="margin-top:0">O que o agente fez nesta execução</h2>
+  <div class="grid" id="agKpis"></div>
+  <div class="panel" id="agAcoes"></div>
+
+  <h2>Outbox — as ações que ele emitiu</h2>
+  <div class="panel" id="agOutbox"></div>
+  <div class="note" id="agTrava"></div>
+
+  <h2>Contas a pagar já programado (Art. 8 e 9)</h2>
+  <div class="panel" id="agLotes"></div>
+
+  <h2>Diagnóstico da fila</h2>
   <div class="grid" id="kpis"></div>
 
   <div class="note">
@@ -178,6 +190,67 @@ async function boot(){
     <td class="num muted">${g.medianH===null?'—':g.medianH+'h'}</td>
     <td class="num ${g.idleDays>90?'sev3':'muted'}">${g.idleDays===null?'—':'há '+g.idleDays+'d'}</td></tr>`).join('');
 
+  // ---------------- painel do agente ----------------
+  const A = S.agente || {};
+  const totAg = Object.values(A.porAcao||{}).reduce((a,b)=>a+b,0) || 1;
+  const DONO = { ENCERRAR:'agente', DEVOLVER:'solicitante', CORRIGIR_E_ENCAMINHAR:'agente',
+                 RECOMENDAR_ESTORNO:'contas a pagar', ENCAMINHAR:'aprovador' };
+  const COR  = { ENCERRAR:'var(--arquivar)', DEVOLVER:'var(--redirecionar)',
+                 CORRIGIR_E_ENCAMINHAR:'var(--liberar)', RECOMENDAR_ESTORNO:'var(--confirmar)',
+                 ENCAMINHAR:'var(--accent)' };
+  $('#agKpis').innerHTML = `
+    <div class="kpi"><div class="n">${fmt(A.naoConsomemAprovador)}</div>
+      <div class="l">nunca chegam ao diretor</div>
+      <div class="s">${A.pctNaoConsomemAprovador}% da fila resolvida sem consumir alçada</div></div>
+    <div class="kpi"><div class="n">${fmt(A.acoesEmitidas)}</div>
+      <div class="l">ações emitidas</div>
+      <div class="s">${fmt(A.devolucoesRedigidas)} devoluções redigidas · ${fmt(A.notificacoesDePenalidade)} notificações Art. 12</div></div>
+    <div class="kpi"><div class="n">${fmt(A.correcoesAutomaticas)}</div>
+      <div class="l">correções aplicadas sozinho</div>
+      <div class="s">${fmt(A.reroteadosPorAlcada)} reroteados por alçada (Art. 7)</div></div>
+    <div class="kpi"><div class="n">${fmt(A.horasEconomizadas)}h</div>
+      <div class="l">trabalho humano substituído</div>
+      <div class="s">premissa editável, não medição</div></div>
+    <div class="kpi"><div class="n">${fmt(A.lotesCAP?.pedidosProgramaveis)}</div>
+      <div class="l">prontos para contas a pagar</div>
+      <div class="s">${A.lotesCAP?.lotes?.length||0} lote(s) montado(s)</div></div>`;
+
+  $('#agAcoes').innerHTML = `<table>
+    <thead><tr><th>Ação do agente</th><th>Dono da bola depois dela</th>
+      <th class="num">Pedidos</th><th style="width:34%">Fatia</th></tr></thead>
+    <tbody>${Object.entries(A.porAcao||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr onclick="verAgente('${k}')">
+      <td><span class="pill" style="background:#1b212c;color:${COR[k]||'var(--fg)'}">${k}</span></td>
+      <td class="muted">${DONO[k]||'—'}</td><td class="num">${fmt(v)}</td>
+      <td><div class="bar"><i style="width:${100*v/totAg}%;background:${COR[k]||'var(--accent)'}"></i></div></td>
+    </tr>`).join('')}</tbody></table>`;
+
+  const ob = await (await fetch('/api/agente/outbox?limite=12')).json();
+  const cnt = {};
+  for (const a of (ob.acoes||[])) cnt[a.tipo] = (cnt[a.tipo]||0)+1;
+  $('#agOutbox').innerHTML = `<table>
+    <thead><tr><th>Tipo</th><th>Destinatário</th><th>Assunto</th><th>Base legal</th><th>Status</th></tr></thead>
+    <tbody>${(ob.acoes||[]).slice(0,10).map(a=>`<tr onclick="verParecer(${a.pedido_id})">
+      <td><code>${a.tipo}</code></td><td>${esc((a.destinatario||'—').slice(0,26))}</td>
+      <td class="muted">${esc((a.assunto||'').slice(0,54))}</td>
+      <td class="muted">${esc(a.base_legal||'—')}</td>
+      <td class="${a.status==='entregue'?'':'muted'}">${a.status}</td></tr>`).join('')}</tbody></table>`;
+  $('#agTrava').innerHTML = `<b>Lista fechada de ações:</b> ${(ob.tiposPermitidos||[]).map(t=>`<code>${t}</code>`).join(' ')}
+    <br>Nenhuma delas aprova ou recusa. A Política reserva isso à alçada (Art. 7) e trata segregação de funções
+    como regra inviolável (Art. 4). A trava recusa qualquer outro tipo antes de qualquer chamada de rede.`;
+
+  const L = A.lotesCAP || {};
+  $('#agLotes').innerHTML = `<table>
+    <thead><tr><th>Data de pagamento</th><th class="num">Dia do ciclo</th><th class="num">Pedidos</th>
+      <th>Forma</th><th class="num">Minutos de ERP poupados</th></tr></thead>
+    <tbody>${(L.lotes||[]).map(l=>`<tr>
+      <td>${l.dataPagamento.split('-').reverse().join('/')}</td>
+      <td class="num">${l.diaDoCiclo}</td><td class="num">${fmt(l.quantidade)}</td>
+      <td>${l.formaDePagamento}</td><td class="num">${fmt(l.minutosEconomizados)}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">nenhum lote</td></tr>'}
+    </tbody></table>
+    <div style="padding:11px 14px;color:var(--faint);font-size:12.5px">${esc(L.observacao||'')}
+      Valor total sai nulo de propósito: o campo de valor não é legível no perfil atual do GoService.</div>`;
+
   const TR = S.tiposDeAltoRisco || [], base = 100*(S.taxaBaseRecusa||0);
   $('#tipos').innerHTML = `<table>
     <thead><tr><th>Classe do pedido</th><th class="num">Decididos</th><th class="num">Recusados</th>
@@ -237,6 +310,58 @@ async function load(){
 }
 
 function fila(a){ window.open('/api/queue?aprovador='+encodeURIComponent(a)+'&limite=200','_blank'); }
+function verAgente(acao){ window.open('/api/agente/fila?acao='+acao+'&limite=300','_blank'); }
+
+async function verParecer(id){
+  if (!id) return;
+  const p = await (await fetch('/api/agente/parecer?id='+id)).json();
+  if (p.erro) return;
+  $('#dt').textContent = 'Parecer do agente · pedido #' + p.pedidoId;
+  $('#ds').textContent = p.decisao.rotulo + ' — dono: ' + p.decisao.dono;
+  const msg = p.mensagemAoSolicitante || p.notificacaoDePenalidade;
+  $('#dbody').innerHTML = `
+    <h3>Decisão</h3>
+    <p><span class="pill" style="background:#1b212c;color:var(--accent)">${p.decisao.acao}</span>
+       <strong>${esc(p.decisao.rotulo)}</strong></p>
+    <p class="muted">${esc(p.decisao.porque)}</p>
+    <p class="muted">Base normativa: <b style="color:var(--fg)">${esc(p.baseNormativa||'—')}</b></p>
+
+    <h3>Violações de política (${p.violacoes.length})</h3>
+    ${p.violacoes.map(v=>`<p><span class="sev${v.gravidade}">■</span> <b>${v.regra}</b> · ${esc(v.artigo)}<br>
+      <span class="muted">${esc(v.texto)}</span><br>
+      <span style="color:var(--revisar)">Ao solicitante: ${esc(v.aoSolicitante)}</span></p>`).join('') || '<p class="muted">nenhuma</p>'}
+
+    ${p.correcoesAplicadas.length ? `<h3>Correções que o agente aplicou sozinho</h3>` +
+      p.correcoesAplicadas.map(c=>`<p><b>${esc(c.campo)}</b>: <code>${esc(c.de||'—')}</code> →
+        <code>${esc(c.para)}</code><br><span class="muted">${esc(c.fonte)} · confiança ${c.confianca} · ${esc(c.artigo)}</span></p>`).join('') : ''}
+
+    <h3>Roteamento de alçada (Art. 7)</h3>
+    <dl class="kv">
+      <dt>Aprovador atual</dt><dd>${esc(p.roteamentoDeAlcada?.aprovadorAtual||'—')} (${esc(p.roteamentoDeAlcada?.nivelAtual||'—')})</dd>
+      <dt>Nível exigido</dt><dd>${esc(p.roteamentoDeAlcada?.nivelExigido||'não determinável sem o valor')}</dd>
+      <dt>Base</dt><dd class="muted">${esc(p.roteamentoDeAlcada?.baseLegal||'—')}</dd>
+      <dt>Precisa rerotear</dt><dd>${p.roteamentoDeAlcada?.precisaRerotear?'<span class="sev3">sim</span>':'não'}</dd>
+    </dl>
+
+    ${msg ? `<h3>Mensagem que o agente escreveu</h3>
+      <dl class="kv"><dt>Para</dt><dd>${esc(msg.para)}</dd><dt>Assunto</dt><dd>${esc(msg.assunto)}</dd></dl>
+      <pre style="white-space:pre-wrap;background:var(--panel2);padding:13px;border-radius:8px;font-size:12.5px;margin-top:9px">${esc(msg.corpo)}</pre>` : ''}
+
+    ${p.planoContasAPagar ? `<h3>Plano de contas a pagar</h3>
+      <dl class="kv">
+        <dt>Pagamento em</dt><dd>${new Date(p.planoContasAPagar.dataPagamento).toISOString().slice(0,10).split('-').reverse().join('/')} (dia ${p.planoContasAPagar.diaDoCiclo})</dd>
+        <dt>Forma</dt><dd>${esc(p.planoContasAPagar.formaDePagamento)}</dd>
+        <dt>Base</dt><dd class="muted">${esc(p.planoContasAPagar.referencia)}</dd>
+        <dt>Bloqueado por</dt><dd>${p.planoContasAPagar.bloqueadoPor.length?'<span class="sev3">'+p.planoContasAPagar.bloqueadoPor.join(', ')+'</span>':'nada'}</dd>
+      </dl>` : ''}
+
+    <h3>Ações emitidas (${p.acoesEmitidas.length})</h3>
+    ${p.acoesEmitidas.map(a=>`<p><code>${esc(a.tipo)}</code> → ${esc(a.destinatario||'—')}
+      <span class="muted">· ${esc(a.base_legal||'')} · ${esc(a.status)}</span></p>`).join('') || '<p class="muted">nenhuma</p>'}
+
+    <div class="note" style="margin-top:20px"><b>Limite do agente:</b> ${esc(p.limite)}</div>`;
+  $('#dlg').showModal();
+}
 
 async function abrir(id){
   const d = await (await fetch('/api/item?id='+id)).json();

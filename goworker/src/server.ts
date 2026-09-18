@@ -2,6 +2,9 @@ import { handleMcp } from "./mcp/shim";
 import { defineMcp } from "./mcp/define";
 import { enrich, analyze, summarize, auditRetroativo, motivosDeRecusa, ACOES, ZOMBIE_DAYS, APPROVER_IDLE_DAYS } from "./engine";
 import { expandSnapshot } from "./snapshot";
+import { montarContexto, processarFila, montarLotesCAP, acoesDoItem, processar, ACOES_AGENTE, HH_PADRAO } from "./agent";
+import { despachar, validarAcao, TIPOS_PERMITIDOS } from "./outbox";
+import { NIVEIS_APROVADORES } from "./aprovadores";
 
 // ============================================================================
 // Goworker do Financeiro
@@ -25,6 +28,18 @@ const SCHEMA = [
      age_days REAL, approver TEXT, codes TEXT, doc TEXT, prioridade INTEGER, kind TEXT)`,
   `CREATE INDEX IF NOT EXISTS ix_tri_action ON triage(action)`,
   `CREATE INDEX IF NOT EXISTS ix_tri_approver ON triage(approver)`,
+  // Livro-razao do agente: uma linha por decisao tomada, com a base normativa.
+  `CREATE TABLE IF NOT EXISTS agente_acoes (
+     pedido_id INTEGER PRIMARY KEY, run_id INTEGER, acao TEXT, dono TEXT, porque TEXT,
+     artigos TEXT, minutos INTEGER, idade_dias INTEGER, rerroteado INTEGER, doc TEXT)`,
+  `CREATE INDEX IF NOT EXISTS ix_ag_acao ON agente_acoes(acao)`,
+  // Outbox: o que o agente emite para o mundo. Lista fechada de tipos.
+  `CREATE TABLE IF NOT EXISTS outbox (
+     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, tipo TEXT, pedido_id INTEGER,
+     destinatario TEXT, assunto TEXT, base_legal TEXT, payload TEXT,
+     status TEXT, criado_em TEXT, despachado_em TEXT, resultado TEXT)`,
+  `CREATE INDEX IF NOT EXISTS ix_out_status ON outbox(status)`,
+  `CREATE INDEX IF NOT EXISTS ix_out_tipo ON outbox(tipo)`,
   `CREATE TABLE IF NOT EXISTS audit (
      id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, actor TEXT,
      approval_id INTEGER, event TEXT, detail TEXT)`,
@@ -37,7 +52,7 @@ const chunkFor = (cols: number) => Math.max(1, Math.floor(MAX_SQL_VARS / cols));
 
 // env.DB sobrevive a updateApp, entao CREATE TABLE IF NOT EXISTS NAO migra uma
 // tabela cujo formato mudou. Versionamos o schema e recriamos o que e derivado.
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 let ready = false;
 async function init(env: any) {
@@ -51,6 +66,8 @@ async function init(env: any) {
     // approvals, runs e audit sao preservadas.
     console.log(`[schema] migrando ${atual} -> ${SCHEMA_VERSION}: recriando triage`);
     await env.DB.exec("DROP TABLE IF EXISTS triage", []);
+    await env.DB.exec("DROP TABLE IF EXISTS agente_acoes", []);
+    await env.DB.exec("DROP TABLE IF EXISTS outbox", []);
   }
   for (const stmt of SCHEMA) await env.DB.exec(stmt, []);
   if (atual < SCHEMA_VERSION) {
@@ -221,7 +238,61 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
     await env.DB.exec(`INSERT INTO triage (approval_id,run_id,action,risk,age_days,approver,codes,doc,prioridade,kind) VALUES ${ph}`, p);
   }
   mark("triagem gravada");
-  await logAudit(env, actor, null, "run", { runId: rid, origem, pendentes: s.totalPending, acoes: s.byAction });
+
+  // ---- O AGENTE decide e executa. Nao pergunta item a item.
+  const hhSalvo = await lerHH(env);
+  const ctxAg = montarContexto(all, { agora: Date.now(), niveis: NIVEIS_APROVADORES, hh: hhSalvo });
+  const ag = processarFila(a.pending, ctxAg);
+  const lotesCap = montarLotesCAP(ag.itens, ctxAg);
+  mark("agente decidiu", { acoes: ag.porAcao, horas: ag.horasEconomizadas });
+
+  await env.DB.exec("DELETE FROM agente_acoes", []);
+  const C1 = chunkFor(10);
+  for (let i = 0; i < ag.itens.length; i += C1) {
+    const sl = ag.itens.slice(i, i + C1);
+    const ph = sl.map(() => "(?,?,?,?,?,?,?,?,?,?)").join(",");
+    const p: any[] = [];
+    for (const x of sl) {
+      p.push(x.id, rid, x.acao, x.dono, x.porque, x.artigosCitados.join(", "),
+        x.minutosEconomizados, x.idadeDias, x.roteamento.precisaRerotear ? 1 : 0,
+        JSON.stringify({ violacoes: x.violacoes, correcoes: x.correcoes, roteamento: x.roteamento,
+          planoCAP: x.planoCAP, mensagem: x.mensagemAoSolicitante, penalidade: x.notificacaoPenalidade }));
+    }
+    await env.DB.exec(`INSERT INTO agente_acoes (pedido_id,run_id,acao,dono,porque,artigos,minutos,idade_dias,rerroteado,doc) VALUES ${ph}`, p);
+  }
+
+  // Outbox reconstruida a cada execucao, preservando o que ja foi entregue.
+  const entregues = await env.DB.query("SELECT tipo, pedido_id FROM outbox WHERE status = 'entregue'", []);
+  const jaEntregue = new Set((entregues.rows ?? []).map((r: any) => r.tipo + ":" + r.pedido_id));
+  await env.DB.exec("DELETE FROM outbox WHERE status <> 'entregue'", []);
+  const agora = new Date().toISOString();
+  const acoes = ag.itens.flatMap(acoesDoItem).filter((x: any) => !jaEntregue.has(x.tipo + ":" + x.pedidoId));
+  const C2 = chunkFor(9);
+  for (let i = 0; i < acoes.length; i += C2) {
+    const sl = acoes.slice(i, i + C2);
+    const ph = sl.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
+    const p: any[] = [];
+    for (const x of sl) p.push(rid, x.tipo, x.pedidoId, x.destinatario, x.assunto, x.baseLegal,
+      JSON.stringify(x.payload), "pronta", agora);
+    await env.DB.exec(`INSERT INTO outbox (run_id,tipo,pedido_id,destinatario,assunto,base_legal,payload,status,criado_em) VALUES ${ph}`, p);
+  }
+  mark("outbox gravada", { acoes: acoes.length });
+
+  s.agente = {
+    porAcao: ag.porAcao, porArtigo: ag.porArtigo, porRegra: ag.porRegra,
+    correcoesAutomaticas: ag.correcoesAutomaticas, reroteadosPorAlcada: ag.reroteadosPorAlcada,
+    devolucoesRedigidas: ag.devolucoesRedigidas, notificacoesDePenalidade: ag.notificacoesDePenalidade,
+    naoConsomemAprovador: ag.naoConsomemAprovador, pctNaoConsomemAprovador: ag.pctNaoConsomemAprovador,
+    minutosEconomizados: ag.minutosEconomizados, horasEconomizadas: ag.horasEconomizadas,
+    premissasHH: ag.premissasHH, acoesEmitidas: acoes.length,
+    lotesCAP: { lotes: lotesCap.lotes, pedidosProgramaveis: lotesCap.pedidosProgramaveis,
+      pedidosBloqueados: lotesCap.pedidosBloqueados, minutosEconomizados: lotesCap.minutosEconomizados,
+      observacao: lotesCap.observacao },
+  };
+  await env.DB.exec("UPDATE runs SET summary = ? WHERE id = ?", [JSON.stringify(s), rid]);
+
+  await logAudit(env, actor, null, "run", { runId: rid, origem, pendentes: s.totalPending,
+    acoes: s.byAction, agente: ag.porAcao, acoesEmitidas: acoes.length });
   mark("fim");
   return { runId: rid, origem, ms: Date.now() - t0, ...s };
 }
@@ -280,6 +351,90 @@ async function dossier(env: any, id: number) {
   };
 }
 
+// ---------------------------------------------------------------- agente: leitura
+
+async function lerHH(env: any) {
+  const r = await env.DB.query("SELECT v FROM meta WHERE k = 'hh'", []);
+  if (!r.rows?.length) return { ...HH_PADRAO };
+  try { return { ...HH_PADRAO, ...JSON.parse(r.rows[0].v) }; } catch { return { ...HH_PADRAO }; }
+}
+async function gravarHH(env: any, novo: any) {
+  const atual = await lerHH(env);
+  const merged: any = { ...atual };
+  for (const [k, v] of Object.entries(novo ?? {})) if (k in HH_PADRAO && Number.isFinite(Number(v))) merged[k] = Number(v);
+  await env.DB.exec("INSERT INTO meta (k, v) VALUES ('hh', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+    [JSON.stringify(merged)]);
+  return merged;
+}
+
+async function filaAgente(env: any, f: { acao?: string; dono?: string; artigo?: string; limite?: number }) {
+  const w: string[] = [], p: any[] = [];
+  if (f.acao) { w.push("acao = ?"); p.push(f.acao.toUpperCase()); }
+  if (f.dono) { w.push("dono LIKE ?"); p.push("%" + f.dono.toLowerCase() + "%"); }
+  if (f.artigo) { w.push("artigos LIKE ?"); p.push("%" + f.artigo + "%"); }
+  p.push(Math.min(f.limite ?? 50, 500));
+  const r = await env.DB.query(
+    `SELECT pedido_id, acao, dono, porque, artigos, minutos, idade_dias, rerroteado
+     FROM agente_acoes ${w.length ? "WHERE " + w.join(" AND ") : ""}
+     ORDER BY idade_dias DESC LIMIT ?`, p);
+  return r.rows ?? [];
+}
+
+async function parecerAgente(env: any, id: number) {
+  const r = await env.DB.query("SELECT * FROM agente_acoes WHERE pedido_id = ?", [id]);
+  if (!r.rows?.length) return null;
+  const x: any = r.rows[0];
+  const d = JSON.parse(x.doc || "{}");
+  const t = await env.DB.query("SELECT tipo, destinatario, assunto, base_legal, status FROM outbox WHERE pedido_id = ?", [id]);
+  return {
+    pedidoId: x.pedido_id,
+    decisao: { acao: x.acao, rotulo: (ACOES_AGENTE as any)[x.acao]?.label ?? x.acao, dono: x.dono, porque: x.porque },
+    baseNormativa: x.artigos,
+    violacoes: d.violacoes ?? [],
+    correcoesAplicadas: d.correcoes ?? [],
+    roteamentoDeAlcada: d.roteamento ?? null,
+    mensagemAoSolicitante: d.mensagem ?? null,
+    notificacaoDePenalidade: d.penalidade ?? null,
+    planoContasAPagar: d.planoCAP ?? null,
+    acoesEmitidas: t.rows ?? [],
+    minutosEconomizados: x.minutos,
+    limite: "O agente não aprova nem recusa. O Art. 7 reserva isso à alçada com competência; o Art. 4 trata segregação de funções como regra inviolável.",
+  };
+}
+
+async function lerOutbox(env: any, f: { tipo?: string; status?: string; limite?: number }) {
+  const w: string[] = [], p: any[] = [];
+  if (f.tipo) { w.push("tipo = ?"); p.push(f.tipo.toUpperCase()); }
+  if (f.status) { w.push("status = ?"); p.push(f.status); }
+  p.push(Math.min(f.limite ?? 50, 300));
+  const r = await env.DB.query(
+    `SELECT id, tipo, pedido_id, destinatario, assunto, base_legal, status, criado_em, despachado_em, resultado, payload
+     FROM outbox ${w.length ? "WHERE " + w.join(" AND ") : ""} ORDER BY id DESC LIMIT ?`, p);
+  return (r.rows ?? []).map((x: any) => ({ ...x, payload: JSON.parse(x.payload || "null") }));
+}
+
+// Despacha o que esta pronto. A trava da outbox recusa qualquer tipo fora da
+// lista fechada antes de qualquer chamada de rede.
+async function despacharPendentes(env: any, actor: string | null, tipo?: string, max = 25) {
+  const w = ["status = 'pronta'"]; const p: any[] = [];
+  if (tipo) { w.push("tipo = ?"); p.push(tipo.toUpperCase()); }
+  p.push(Math.min(max, 100));
+  const r = await env.DB.query(
+    `SELECT id, tipo, pedido_id, destinatario, assunto, base_legal, payload FROM outbox
+     WHERE ${w.join(" AND ")} ORDER BY id LIMIT ?`, p);
+  const res: any[] = [];
+  for (const row of (r.rows ?? [])) {
+    const acao = { tipo: row.tipo, pedidoId: row.pedido_id, destinatario: row.destinatario,
+      assunto: row.assunto, payload: JSON.parse(row.payload || "null"), baseLegal: row.base_legal };
+    const out = await despachar(env, acao as any);
+    await env.DB.exec("UPDATE outbox SET status = ?, despachado_em = ?, resultado = ? WHERE id = ?",
+      [out.status, new Date().toISOString(), JSON.stringify(out), row.id]);
+    res.push({ id: row.id, tipo: row.tipo, pedidoId: row.pedido_id, ...out });
+  }
+  await logAudit(env, actor, null, "despacho", { tentadas: res.length, entregues: res.filter(x => x.entregue).length });
+  return { tentadas: res.length, entregues: res.filter(x => x.entregue).length, resultados: res };
+}
+
 // ---------------------------------------------------------------- MCP
 
 const mcp = defineMcp({
@@ -330,6 +485,52 @@ const mcp = defineMcp({
       description: "Aprovadores com 10 ou mais pedidos parados, com a mediana historica de decisao de cada um e ha quantos dias agiu pela ultima vez.",
       inputSchema: { type: "object", properties: {} },
       handler: async (_a, ctx: any) => { const s: any = await lastSummary(ctx.env); return s?.gargalos ?? []; } },
+
+    { name: "goworker_agente_resumo",
+      description: "O que o AGENTE decidiu fazer com a fila inteira: quantos pedidos ele encerra, devolve ao solicitante, corrige, reroteia por alcada e encaminha ao aprovador; quantos nunca chegam a consumir tempo de diretor; horas de trabalho humano substituidas; e os lotes de contas a pagar ja montados. Este e o painel do agente, nao da fila.",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_a, ctx: any) => { const sm: any = await lastSummary(ctx.env); return sm?.agente ?? { erro: "sem execucao" }; } },
+
+    { name: "goworker_agente_fila",
+      description: "Pedidos com a acao que o AGENTE tomou. Filtre por acao (ENCERRAR, DEVOLVER, CORRIGIR_E_ENCAMINHAR, RECOMENDAR_ESTORNO, ENCAMINHAR), por dono da bola (agente, solicitante, aprovador, contas a pagar) ou por artigo da Politica de Pagamentos (ex: 'Art. 11', 'Art. 7', 'Anexo I').",
+      inputSchema: { type: "object", properties: {
+        acao: { type: "string" }, dono: { type: "string" }, artigo: { type: "string" }, limite: { type: "number" } } },
+      handler: async (a: any, ctx: any) => filaAgente(ctx.env, { acao: a.acao, dono: a.dono, artigo: a.artigo, limite: a.limite }) },
+
+    { name: "goworker_agente_parecer",
+      description: "Parecer completo do agente sobre um pedido: decisao e por que, violacoes de politica com o artigo citado, correcoes que ele aplicou sozinho, roteamento de alcada, a mensagem que ele redigiu ao solicitante, a notificacao de penalidade quando cabe, e o plano de contas a pagar. Mostra tambem o limite: o agente nao aprova nem recusa.",
+      inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+      handler: async (a: any, ctx: any) => (await parecerAgente(ctx.env, Number(a.id))) ?? { erro: "nao encontrado" } },
+
+    { name: "goworker_outbox",
+      description: "As acoes concretas que o agente emitiu: devolucoes ao solicitante, notificacoes de penalidade, recomendacoes de estorno, correcoes de cadastro, reroteamentos de alcada, encerramentos e lotes de CAP. Cada uma com destinatario, assunto, corpo e base legal. A lista de tipos e FECHADA e nao inclui aprovar nem recusar.",
+      inputSchema: { type: "object", properties: {
+        tipo: { type: "string" }, status: { type: "string", description: "pronta | entregue | recusada_pela_trava" }, limite: { type: "number" } } },
+      handler: async (a: any, ctx: any) => ({ tiposPermitidos: TIPOS_PERMITIDOS,
+        acoes: await lerOutbox(ctx.env, { tipo: a.tipo, status: a.status, limite: a.limite }) }) },
+
+    { name: "goworker_despachar",
+      description: "Manda o agente entregar as acoes que estao prontas na outbox. Sem OUTBOX_WEBHOOK_URL configurado elas ficam prontas e o resultado explica isso. A trava recusa qualquer tipo fora da lista fechada ANTES de qualquer chamada de rede: nao existe caminho para aprovar ou recusar um pagamento.",
+      inputSchema: { type: "object", properties: {
+        tipo: { type: "string", description: "restringe a um tipo de acao" },
+        max: { type: "number", description: "maximo de acoes por chamada, ate 100" } } },
+      handler: async (a: any, ctx: any) => despacharPendentes(ctx.env, ctx.userEmail, a.tipo, Number(a.max ?? 25)) },
+
+    { name: "goworker_lotes_cap",
+      description: "Lotes de contas a pagar ja montados pelo agente para os pedidos que passarem na aprovacao: data de pagamento pelo calendario do Art. 9 (dias 10, 20 e 30), prazo do Art. 8 (2 dias uteis de lancamento fiscal + 3 de programacao) e forma PIX do Art. 10. Cada lote traz os itens e os minutos de digitacao no ERP que deixam de existir.",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_a, ctx: any) => { const sm: any = await lastSummary(ctx.env); return sm?.agente?.lotesCAP ?? { erro: "sem execucao" }; } },
+
+    { name: "goworker_premissas_hh",
+      description: "Le ou ajusta os minutos de trabalho humano que cada acao do agente substitui. Sao PREMISSAS declaradas, nao medicoes: passe novos valores para calibrar com o time de Contas a Pagar e o calculo de horas economizadas muda na proxima execucao.",
+      inputSchema: { type: "object", properties: {
+        triagem_documental: { type: "number" }, correcao_cadastro: { type: "number" },
+        devolucao_ao_solicitante: { type: "number" }, roteamento_alcada: { type: "number" },
+        montagem_dossie: { type: "number" }, cobranca_de_fila: { type: "number" },
+        programacao_cap: { type: "number" }, encerramento: { type: "number" } } },
+      handler: async (a: any, ctx: any) => Object.keys(a).length
+        ? { premissas: await gravarHH(ctx.env, a), aviso: "Vale a partir da proxima execucao." }
+        : { premissas: await lerHH(ctx.env), padrao: HH_PADRAO } },
 
     { name: "goworker_registrar_decisao",
       description: "Registra na trilha de auditoria o que um humano decidiu sobre um pedido. NAO aprova nem recusa no GoService: este agente nao tem permissao de escrita no GLPI, por desenho. Serve para o agente saber o que ja foi tratado.",
@@ -395,6 +596,44 @@ export default {
         return json({ ok: true, registros: raw.length, pendentes: a.pending.length,
           dossies: ctx.size, totalMs: Date.now() - t0, etapas: t, origem: src.origem });
       }
+
+      // ---------------- agente ----------------
+      if (path === "/api/agente/resumo") {
+        const sm: any = await lastSummary(env);
+        return sm?.agente ? json({ runId: sm.runId, ranAt: sm.ranAt, ...sm.agente }) : json({ erro: "sem execucao" }, 404);
+      }
+      if (path === "/api/agente/fila") {
+        return json(await filaAgente(env, {
+          acao: url.searchParams.get("acao") ?? undefined,
+          dono: url.searchParams.get("dono") ?? undefined,
+          artigo: url.searchParams.get("artigo") ?? undefined,
+          limite: Number(url.searchParams.get("limite") ?? 50) }));
+      }
+      if (path === "/api/agente/parecer") {
+        const d = await parecerAgente(env, Number(url.searchParams.get("id")));
+        return d ? json(d) : json({ erro: "pedido nao esta na fila do agente" }, 404);
+      }
+      if (path === "/api/agente/outbox") {
+        return json({ tiposPermitidos: TIPOS_PERMITIDOS, acoes: await lerOutbox(env, {
+          tipo: url.searchParams.get("tipo") ?? undefined,
+          status: url.searchParams.get("status") ?? undefined,
+          limite: Number(url.searchParams.get("limite") ?? 50) }) });
+      }
+      if (path === "/api/agente/despachar" && request.method === "POST") {
+        const b: any = await request.json().catch(() => ({}));
+        return json(await despacharPendentes(env, actor, b.tipo, Number(b.max ?? 25)));
+      }
+      if (path === "/api/agente/lotes") {
+        const sm: any = await lastSummary(env);
+        return sm?.agente?.lotesCAP ? json(sm.agente.lotesCAP) : json({ erro: "sem execucao" }, 404);
+      }
+      if (path === "/api/agente/hh" && request.method === "POST") {
+        const b: any = await request.json().catch(() => ({}));
+        const novo = await gravarHH(env, b);
+        return json({ ok: true, premissas: novo, aviso: "Vale a partir da proxima execucao do agente." });
+      }
+      if (path === "/api/agente/hh") return json({ premissas: await lerHH(env), padrao: HH_PADRAO,
+        aviso: "Minutos de trabalho humano que cada acao substitui. Sao PREMISSAS, nao medicoes: calibrar com o time de CAP." });
 
       if (path === "/api/summary") {
         const s = await lastSummary(env);

@@ -32,7 +32,35 @@ const t = (sel) => (d.querySelector(sel)?.textContent || '').replace(/\s+/g,' ')
 let pass=0, fail=0;
 const ok=(n,c,x='')=>{ if(c){pass++;console.log('  PASS',n);} else {fail++;console.log('  FAIL',n,x);} };
 
-console.log('== dashboard renderizado ==');
+console.log('== painel do agente ==');
+ok('KPIs do agente renderizam', d.querySelectorAll('#agKpis .kpi').length === 5, d.querySelectorAll('#agKpis .kpi').length);
+ok('mostra quantos nao chegam ao diretor', t('#agKpis').includes('nunca chegam ao diretor'));
+ok('mostra horas substituidas', /\d+h/.test(t('#agKpis')));
+ok('tabela de acoes do agente', d.querySelectorAll('#agAcoes tbody tr').length >= 4, d.querySelectorAll('#agAcoes tbody tr').length);
+ok('acoes mostram o dono da bola', t('#agAcoes').includes('solicitante') && t('#agAcoes').includes('aprovador'));
+ok('outbox renderiza com base legal', t('#agOutbox').includes('Art.'), t('#agOutbox').slice(0,80));
+ok('declara a lista fechada e a trava', t('#agTrava').includes('Nenhuma delas aprova ou recusa'));
+ok('lotes de CAP com data e PIX', t('#agLotes').includes('PIX'), t('#agLotes').slice(0,80));
+ok('declara por que o valor e nulo', t('#agLotes').includes('não é legível'));
+
+console.log('\n== parecer do agente (modal) ==');
+{
+  const linha = d.querySelector('#agOutbox tbody tr');
+  const idm = linha && linha.getAttribute('onclick').match(/\d+/);
+  if (idm) {
+    await dom.window.verParecer(Number(idm[0]));
+    await new Promise(r => setTimeout(r, 400));
+    const body = t('#dbody');
+    ok('parecer abriu', d.querySelector('#dlg').hasAttribute('open'));
+    ok('parecer mostra base normativa', body.includes('Base normativa'));
+    ok('parecer mostra roteamento de alcada', body.includes('Roteamento de alçada'));
+    ok('parecer declara o limite do agente', /não aprova nem recusa/i.test(body));
+    ok('sem undefined no parecer do agente', !body.includes('undefined'),
+       (body.match(/.{0,40}undefined.{0,40}/)||[''])[0]);
+  } else { ok('parecer abriu', false, 'sem linha na outbox'); }
+}
+
+console.log('\n== dashboard renderizado ==');
 ok('sem erro de JS', erros.length===0, erros.join(' | '));
 ok('titulo presente', t('h1')==='Goworker do Financeiro', t('h1'));
 ok('cabecalho tem a execucao', /execução #\d+ .* 18\.926 registros/.test(t('#run')), t('#run'));
@@ -59,7 +87,7 @@ ok('mostra lift encolhido', t('#tipos').includes('×'), '');
 ok('nota explica Bonferroni', t('#notaPrio').includes('Bonferroni'));
 ok('painel de motivos de recusa', t('#motivos').includes('centro de custo'), t('#motivos').slice(0,90));
 ok('motivos marcam o que depende de valor', t('#motivos').includes('precisa de valor'), '');
-ok('coluna Prio no cabecalho da fila', d.querySelector('thead')?.textContent.includes('Prio'));
+ok('coluna Prio no cabecalho da fila', [...d.querySelectorAll('thead')].some(h => h.textContent.includes('Prio')));
 
 console.log('\n== dossie (modal) ==');
 const id = rows[0].getAttribute('onclick').match(/\d+/)[0];

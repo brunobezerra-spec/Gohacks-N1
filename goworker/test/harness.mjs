@@ -94,9 +94,9 @@ const rpc = async (method, params) => j(await call('/_mcp', { method:'POST',
 let m = await rpc('initialize', { protocolVersion:'2025-06-18' });
 ok('initialize', m.result?.protocolVersion === '2025-06-18', JSON.stringify(m).slice(0,200));
 m = await rpc('tools/list', {});
-ok('9 ferramentas', m.result?.tools?.length === 9, m.result?.tools?.length);
+ok('16 ferramentas', m.result?.tools?.length === 16, m.result?.tools?.length);
 ok('nomes corretos', m.result.tools.map(t=>t.name).sort().join(',') ===
-  'goworker_auditoria_retroativa,goworker_dossie,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_motivos_de_recusa,goworker_registrar_decisao,goworker_resumo,goworker_tipos_de_alto_risco',
+  'goworker_agente_fila,goworker_agente_parecer,goworker_agente_resumo,goworker_auditoria_retroativa,goworker_despachar,goworker_dossie,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_lotes_cap,goworker_motivos_de_recusa,goworker_outbox,goworker_premissas_hh,goworker_registrar_decisao,goworker_resumo,goworker_tipos_de_alto_risco',
   m.result?.tools?.map(t=>t.name).join(','));
 m = await rpc('tools/call', { name:'goworker_auditoria_retroativa', arguments:{} });
 { const A = m.result?.structuredContent;
@@ -140,11 +140,18 @@ console.log('\n== 8. SEGURANCA: nenhum caminho de escrita no GoService ==');
   ok('nenhum endpoint GLPI/GoService no codigo', !/apirest|TicketValidation|\/Ticket\//i.test(code),
      (code.match(/apirest|TicketValidation/ig)||[]).slice(0,3).join(','));
   // A prova mais forte: o worker nao faz NENHUMA chamada de rede para fora.
-  // `async fetch(request, env)` e a DECLARACAO do handler do Worker, nao uma chamada.
+  // O agente agora DESPACHA acoes, entao ele chama fetch. A garantia deixou de
+  // ser "nao chama rede" e passou a ser mais forte e mais verdadeira:
+  // existe exatamente UMA chamada de rede, ela so vai para o webhook configurado
+  // em runtime, e os tipos que podem passar por ela sao uma lista fechada sem
+  // nenhum ato de aprovacao.
   const chamadas = (code.match(/\bfetch\s*\(/g) || []).length
                  - (code.match(/async\s+fetch\s*\(/g) || []).length;
-  ok('o app nao CHAMA fetch() em lugar nenhum', chamadas === 0,
-     `${chamadas} chamada(s): ` + (code.match(/.{0,45}[^c]\bfetch\s*\(.{0,25}/g)||[]).slice(0,2).join(' | '));
+  ok('existe exatamente uma chamada de rede no app', chamadas === 1,
+     `${chamadas}: ` + (code.match(/.{0,45}[^c]\bfetch\s*\(.{0,30}/g)||[]).slice(0,3).join(' | '));
+  ok('a unica chamada de rede vai para env.OUTBOX_WEBHOOK_URL, nunca uma URL fixa',
+     /fetch\s*\(\s*String\s*\(\s*url\s*\)/.test(code) && !/["'`]https?:\/\//.test(code));
+  ok('o despachador exige https', /\^https:\\\/\\\//.test(code) || code.includes('webhook precisa ser https'));
   ok('nao usa XMLHttpRequest nem WebSocket', !/XMLHttpRequest|new WebSocket/.test(code));
   ok('nenhuma URL http(s) externa no codigo', !/["'`]https?:\/\//.test(code),
      (code.match(/["'`]https?:\/\/[^"'`]{0,40}/g)||[]).slice(0,3).join(' | '));
@@ -223,7 +230,7 @@ console.log('\n== 11. migracao de schema antigo (env.DB sobrevive a updateApp) =
   ok('run sobre base com schema antigo', rr.status === 200, JSON.stringify(bb).slice(0, 200));
   ok('triagem regravada no formato novo', bb.totalPending === 1058, bb.totalPending);
   rr = await c2('/api/health'); bb = await j(rr);
-  ok('schema marcado na versao atual', bb.schemaVersion === 4, bb.schemaVersion);
+  ok('schema marcado na versao atual', bb.schemaVersion === 5, bb.schemaVersion);
   const q = await j(await c2('/api/queue?acao=BLOQUEAR&limite=50'));
   ok('linha velha some apos migracao', q.every(x => x.action !== 'VELHO') && q.length === EXP.byAction.BLOQUEAR, q.length);
 }
