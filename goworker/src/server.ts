@@ -429,7 +429,10 @@ async function lerOutbox(env: any, f: { tipo?: string; status?: string; limite?:
 // Despacha o que esta pronto. A trava da outbox recusa qualquer tipo fora da
 // lista fechada antes de qualquer chamada de rede.
 async function despacharPendentes(env: any, actor: string | null, tipo?: string, max = 25) {
-  const w = ["status = 'pronta'"]; const p: any[] = [];
+  // Reprocessa tudo que ainda NAO foi entregue, nao so o que nunca foi tentado.
+  // Uma falha por permissao vira sucesso assim que a permissao existe; deixar
+  // "falhou" fora da fila congelava o lote inteiro depois do primeiro erro.
+  const w = ["status <> 'entregue'"]; const p: any[] = [];
   if (tipo) { w.push("tipo = ?"); p.push(tipo.toUpperCase()); }
   p.push(Math.min(max, 100));
   const r = await env.DB.query(
@@ -468,7 +471,10 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
   const tipoEnv = env.GLPI_TIPO && String(env.GLPI_TIPO).trim() ? String(env.GLPI_TIPO).trim() : undefined;
   const maxEnv = Number(env.GLPI_MAX ?? 0);
   o = { ...o, tipo: o.tipo ?? tipoEnv, max: o.max ?? (maxEnv > 0 ? maxEnv : undefined) };
-  const w = ["status = 'pronta'"]; const p: any[] = [];
+  // Reprocessa tudo que ainda NAO foi entregue, nao so o que nunca foi tentado.
+  // Uma falha por permissao vira sucesso assim que a permissao existe; deixar
+  // "falhou" fora da fila congelava o lote inteiro depois do primeiro erro.
+  const w = ["status <> 'entregue'"]; const p: any[] = [];
   if (o.tipo) { w.push("tipo = ?"); p.push(o.tipo.toUpperCase()); }
   // CORRIGIR_CADASTRO fica de fora: corrigir CNPJ em cadastro de fornecedor e
   // ato do Supply/Compras no ERP, nao do agente no chamado.
@@ -480,7 +486,15 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
     const alvo = await env.DB.query(
       "SELECT approval_id FROM triage WHERE json_extract(doc,'$.usersIdValidate') = ?", [Number(piloto)]);
     const ids = (alvo.rows ?? []).map((x: any) => Number(x.approval_id));
-    console.log(`[glpi] piloto ${piloto}: ${ids.length} pedidos na fila dele`);
+    console.log(`[glpi] piloto ${piloto}: ${ids.length} pedidos na fila dele -> ${ids.join(",")}`);
+    // Diagnostico: o que existe na outbox para esses pedidos, por status e tipo.
+    if (ids.length) {
+      const d = await env.DB.query(
+        `SELECT tipo, status, COUNT(*) n FROM outbox WHERE pedido_id IN (${ids.map(() => "?").join(",")})
+         GROUP BY tipo, status`, ids);
+      console.log("[glpi] outbox do piloto: " +
+        ((d.rows ?? []).map((r: any) => `${r.tipo}/${r.status}=${r.n}`).join(" | ") || "VAZIA"));
+    }
     if (!ids.length) return { modo: modoGlpi(env), piloto, executadas: 0, total: 0, resultados: [],
       aviso: `Nenhum pedido parado para o aprovador ${piloto}.` };
     w.push(`pedido_id IN (${ids.map(() => "?").join(",")})`);

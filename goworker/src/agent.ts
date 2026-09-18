@@ -347,8 +347,21 @@ export function acoesDoItem(x: any) {
       payload: x.mensagemAoSolicitante, baseLegal: "Art. 11" });
   }
   if (x.acao === "ENCERRAR") {
+    // O corpo precisa dizer POR QUE, com a base normativa. Um encerramento sem
+    // motivo registrado nao serve de trilha de auditoria para ninguem.
+    const corpo = [
+      `Encerrado pelo Goworker do Financeiro, sem pagamento.`,
+      ``,
+      `Motivo: ${x.porque}`,
+      ...(x.violacoes.length
+        ? [``, `Base normativa:`, ...x.violacoes.map((v: any) => `- ${v.artigo}: ${v.texto}`)]
+        : []),
+      ``,
+      `Este encerramento nao aprova nem recusa pagamento: a validacao do pedido segue intocada e a decisao continua sendo do aprovador com alcada (Art. 7).`,
+    ].join("\n");
     out.push({ tipo: "ENCERRAR_PEDIDO", pedidoId: x.id, destinatario: "GoService",
-      assunto: `Encerrar pedido #${x.id}`, payload: { motivo: x.porque }, baseLegal: x.artigosCitados.join(", ") });
+      assunto: `Encerrar pedido #${x.id}`,
+      payload: { corpo, motivo: x.porque }, baseLegal: x.artigosCitados.join(", ") });
   }
   for (const c of x.correcoes) {
     out.push({ tipo: "CORRIGIR_CADASTRO", pedidoId: x.id, destinatario: "GoService/ERP",
