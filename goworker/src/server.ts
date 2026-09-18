@@ -271,8 +271,8 @@ async function dossier(env: any, id: number) {
     pedidosComMesmoTitulo: ctx.pedidosComMesmoTitulo ?? [],
     cargaDoAprovador: ctx.cargaDoAprovador ?? null,
     trilhaDeAuditoria: trilha.rows ?? [],
-    limiteConhecido: "Valor, vencimento, nota fiscal e centro de custo NAO estao disponiveis no perfil de leitura atual do GoService. Nenhuma recomendacao aqui considera valores.",
-    decisaoFinal: "Humana. Este agente nao aprova nem recusa nada.",
+    limiteConhecido: "Valor, vencimento, nota fiscal e centro de custo não estão disponíveis no perfil de leitura atual do GoService. Nenhuma recomendação aqui considera valores.",
+    decisaoFinal: "Humana. Este agente não aprova nem recusa nada.",
   };
 }
 
@@ -323,7 +323,7 @@ const mcp = defineMcp({
       handler: async (a: any, ctx: any) => {
         await logAudit(ctx.env, ctx.userEmail, Number(a.id), "decisao_humana", { decisao: a.decisao, observacao: a.observacao ?? null });
         return { registrado: true, id: Number(a.id), decisao: a.decisao, por: ctx.userEmail ?? "anonimo",
-          aviso: "Registro apenas na trilha do Goworker. A acao no GoService continua sendo manual." };
+          aviso: "Registro apenas na trilha do Goworker. A ação no GoService continua sendo manual." };
       } },
   ],
 });
@@ -401,7 +401,7 @@ export default {
       if (path === "/api/audit" && request.method === "POST") {
         const b: any = await request.json();
         await logAudit(env, actor, b.id ? Number(b.id) : null, b.evento ?? "decisao_humana", b);
-        return json({ ok: true, aviso: "Registrado apenas no Goworker. Nao escreve no GoService." });
+        return json({ ok: true, aviso: "Registrado apenas no Goworker. Não escreve no GoService." });
       }
 
       if (path === "/api/audit") {

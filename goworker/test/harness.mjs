@@ -74,8 +74,8 @@ r = await call('/api/item?id=' + alvo); b = await j(r);
 ok('dossie 200', r.status === 200);
 ok('tem recomendacao', !!b.recomendacao?.acao);
 ok('tem sinais', Array.isArray(b.sinais) && b.sinais.length > 0);
-ok('declara limite de dados', String(b.limiteConhecido).includes('NAO estao disponiveis'));
-ok('declara decisao humana', String(b.decisaoFinal).includes('nao aprova'));
+ok('declara limite de dados', String(b.limiteConhecido).includes('não estão disponíveis'));
+ok('declara decisao humana', String(b.decisaoFinal).includes('não aprova nem recusa'));
 ok('carga do aprovador presente', b.cargaDoAprovador && typeof b.cargaDoAprovador.parados === 'number', JSON.stringify(b.cargaDoAprovador));
 r = await call('/api/item?id=999999'); ok('dossie inexistente = 404', r.status === 404);
 
@@ -116,7 +116,7 @@ ok('dossie via MCP', !!m.result?.structuredContent?.recomendacao);
 m = await rpc('tools/call', { name:'goworker_registrar_decisao', arguments:{ id: alvo, decisao:'adiado' } });
 ok('registrar decisao', m.result?.structuredContent?.registrado === true);
 ok('avisa que nao escreve no GoService',
-   String(m.result?.structuredContent?.aviso).includes('manual'), m.result?.structuredContent?.aviso);
+   String(m.result?.structuredContent?.aviso).includes('continua sendo manual'), m.result?.structuredContent?.aviso);
 m = await rpc('tools/call', { name:'inexistente', arguments:{} });
 ok('ferramenta inexistente = erro JSON-RPC', m.error?.code === -32602);
 
