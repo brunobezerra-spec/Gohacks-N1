@@ -4,23 +4,44 @@
 
 ```bash
 cd goworker
+npm install
 npx esbuild src/server.ts --bundle --format=esm --platform=neutral --outfile=/tmp/bundle.js
 
-node test/harness.mjs                        # 79 testes
-node test/agente.mjs                         # 99 testes
-node test/dashboard.mjs                      # 47 testes
-node test/anexos.test.mjs                    # 22 testes
-
-node src/run.js ../data/approvals_full.json  # motor no dataset completo
+node test/harness.mjs        # 79 testes, 2 falhando (ver README)
+node test/agente.mjs         # 99 testes
+node test/dashboard.mjs      # 47 testes
+node test/anexos.test.mjs    # 23 testes
+node test/pdf.test.mjs       #  5 testes
 ```
 
-Não há `npm install`: o worker não tem dependência de runtime. O `esbuild` vem via `npx`.
+`npm install` passou a ser necessário quando o `unpdf` entrou. Antes disso o worker não
+tinha dependência de runtime.
 
 Varredura de anexos fora do worker, contra o GLPI real:
 
 ```bash
 GLPI_APP_TOKEN=... GLPI_USER_TOKEN=... node src/varrer-anexos.mjs [limite]
 ```
+
+**`node src/run.js` não funciona hoje.** O Node só remove tipos, não resolve import sem
+extensão, e `engine.ts` importa `./regras`. Para rodar o motor sobre um dataset inteiro,
+empacotar `test/lib-entry.ts` com o esbuild e importar o bundle.
+
+## Build e deploy
+
+O deploy sobe um bundle pré-montado, não o código-fonte solto:
+
+```bash
+cd goworker
+npx esbuild src/server.ts --bundle --format=esm --platform=neutral --minify \
+  --outfile=dist/server.js
+```
+
+O motivo é o pdf.js: medido em 18/09/2026, o bundler do GoDeploy não conclui com ele na
+árvore de dependência (morre sem resposta; o mesmo conjunto sem ele publica em segundos).
+Pré-bundlar resolve sem abrir mão da cobertura de leitura de PDF.
+
+`dist/` fica fora do versionamento: o build é reprodutível byte a byte a partir do fonte.
 
 ## Secrets
 
@@ -31,6 +52,7 @@ GLPI_APP_TOKEN=... GLPI_USER_TOKEN=... node src/varrer-anexos.mjs [limite]
 | `GLPI_MODO` | **modo ensaio**, que é o padrão seguro |
 | `GLPI_PERFIL_ID` | sessão abre no perfil padrão do usuário, que não tem `READALL` |
 | `GLPI_PILOTO_APROVADOR` | sem escopo de piloto: o agente age na fila inteira |
+| `GLPI_CONFERIR_ANEXO` | conferência de anexo **ligada** (padrão `on`); `off` desliga sem deploy |
 | `GLPI_TIPO` / `GLPI_MAX` | parâmetros do lote disparado pelo cron, que vem sem corpo |
 | `OUTBOX_WEBHOOK_URL` | as ações ficam prontas na outbox e não são despachadas |
 
@@ -52,6 +74,30 @@ cerca de 7% da fila. `changeActiveProfile` troca o perfil ativo na sessão, ent�
 precisa mexer no perfil padrão da pessoa e o perfil do agente fica visível na trilha.
 
 Conferir com `goworker_diagnostico_de_perfil` ou `GET /api/diag`.
+
+### Perfis: dois, não um
+
+| Perfil | Para que | Quem usa |
+|---|---|---|
+| 24 | escrever no chamado, com `READALL` | o executor (`glpi.ts`) |
+| 16 | ler `Document`, o anexo | a conferência (`anexos.ts`) |
+
+O direito sobre `Document` não está no perfil 24 nem no Financeiro_tech (9). A conferência
+abre **sessão própria**, troca para o 16 e encerra no fim. Misturar os dois numa sessão só
+daria ao executor mais direito do que ele precisa.
+
+Se a troca de perfil falhar, a conferência devolve `sem_perfil_16` e o agente segue sem
+conferir, em vez de tratar o pedido como divergente.
+
+### Conferência de anexo
+
+Roda dentro de `POST /api/run`, antes da decisão. Varre a fila **do mais caro para o mais
+barato** e para em 45 subrequests, porque o Worker corta em cerca de 50 por invocação e um
+chamado com 4 anexos custa 5. A fila inteira é varrida ao longo de vários ticks do cron.
+
+O resumo por execução traz `conferidos`, `divergentes`, `ilegiveis`, `semAnexo`,
+`naoLocalizado` e `parou`. **`ilegiveis` não é erro**: é o agente dizendo que não soube ler,
+e nesse caso ele não levanta sinal nenhum.
 
 ## Rotas
 
@@ -121,3 +167,9 @@ Ordem recomendada, uma etapa por vez:
 | `aprovacao_ilegivel` | perfil sem `READALL` ou validação apagada | `goworker_diagnostico_de_perfil` |
 | `recusada_pela_trava` | payload com campo de veredito | é a trava funcionando, não corrigir por fora |
 | agente vê ~7% da fila | perfil sem `READALL` | setar `GLPI_PERFIL_ID` para o perfil do agente |
+| `pulado: sem_perfil_16` | credencial sem direito sobre `Document` | liberar o perfil 16 para o usuário do agente |
+| `pulado: desligado` | `GLPI_CONFERIR_ANEXO=off` | tirar o secret |
+| `ilegivel (...:sem_camada_de_texto)` | PDF é imagem escaneada | esperado, exigiria OCR. O agente não levanta sinal |
+| `ilegivel (...:pdf_invalido)` | download falhou ou buffer reusado | conferir se o WAF devolveu 403 por User-Agent |
+| `parou: true` no resumo | teto de 45 subrequests | esperado, o resto entra no próximo tick |
+| conferência 403 em tudo | WAF do GoService | o cliente precisa mandar User-Agent de cliente conhecido |

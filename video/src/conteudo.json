@@ -1,0 +1,202 @@
+{
+  "s1": {
+    "eyebrow": "Goworker do financeiro",
+    "titulo": "Transformar o financeiro",
+    "tituloDestaque": "em IA First",
+    "claim": "Nenhum real sai do Gogroup sem passar por uma checagem de máquina antes de passar por uma assinatura humana.",
+    "selos": [
+      "Em produção no GoService",
+      "748 ações gravadas",
+      "1 vaga congelada"
+    ]
+  },
+  "s2": {
+    "eyebrow": "Status hoje · GoService / GLPI · 18.966 registros",
+    "titulo": "A aprovação de pagamento virou",
+    "tituloDestaque": "carimbo",
+    "metricas": [
+      {
+        "valor": 1071,
+        "decimais": 0,
+        "prefixo": "",
+        "sufixo": "",
+        "label": "pedidos parados na fila",
+        "alerta": false
+      },
+      {
+        "valor": 64.8,
+        "decimais": 1,
+        "prefixo": "R$ ",
+        "sufixo": " mi",
+        "label": "de dinheiro parado",
+        "alerta": true
+      },
+      {
+        "valor": 91,
+        "decimais": 0,
+        "prefixo": "",
+        "sufixo": " d",
+        "label": "mediana parada (mais antigo: 352)",
+        "alerta": false
+      },
+      {
+        "valor": 99.15,
+        "decimais": 2,
+        "prefixo": "",
+        "sufixo": "%",
+        "label": "de aprovação entre os decididos",
+        "alerta": true
+      }
+    ],
+    "citacaoLabel": "O que o aprovador vê antes de assinar",
+    "citacao": "Solicitação de pagamento : Freedom Cosmeticos Ltda 53.402.541/0001-02",
+    "citacaoNota": "Esse texto se repete 1.106 vezes byte a byte idêntico. Sem valor, sem vencimento, sem nota fiscal.",
+    "mini": [
+      {
+        "valor": "16,5 h",
+        "label": "é a mediana para decidir quando alguém decide"
+      },
+      {
+        "valor": "106",
+        "label": "tickets de teste na fila — 23 já foram aprovados"
+      },
+      {
+        "valor": "206",
+        "label": "pedidos aguardando quem não tem alçada (Art. 7)"
+      }
+    ],
+    "provas": [
+      {
+        "label": "O que o carimbo deixou passar",
+        "texto": "37 cadastros com CNPJ ou CPF que reprova no dígito verificador já receberam 162 pagamentos"
+      },
+      {
+        "label": "SEFAZ de São Paulo",
+        "texto": "O mesmo órgão com 3 grafias de CNPJ, 2 inválidas: 88 pagamentos aprovados contra elas"
+      }
+    ]
+  },
+  "s3": {
+    "eyebrow": "O que entregamos",
+    "titulo": "Uma peneira entre quem pede e quem assina",
+    "badgeValor": "79%",
+    "badgeLabel": "da fila nunca chega à mesa do diretor",
+    "origemLabel": "Solicitante",
+    "origemValor": "1.071",
+    "origemNota": "pedidos parados",
+    "origemValorRs": "R$ 64,8 mi",
+    "motorEyebrow": "Funcionário de IA",
+    "motorNome": "Goworker",
+    "passos": [
+      {
+        "titulo": "Lê o pedido",
+        "desc": "título, fornecedor, CNPJ, valor, vencimento"
+      },
+      {
+        "titulo": "Compara com a política",
+        "desc": "Art. 4 ao 12, Anexos I e II"
+      },
+      {
+        "titulo": "Checa consistência",
+        "desc": "23 regras: dígito verificador, duplicidade, autoaprovação, fila zumbi"
+      }
+    ],
+    "motorRodape": "Uma decisão por pedido, todo dia, às 09h15",
+    "destinos": [
+      {
+        "titulo": "Encaminhar ao aprovador",
+        "qtd": "222 pedidos",
+        "valor": "R$ 7,6 mi",
+        "desc": "Instruído: valor, CNPJ validado, alçada conferida e o artigo que sustenta"
+      },
+      {
+        "titulo": "Rotear para o aprovador certo",
+        "qtd": "125 pedidos",
+        "valor": "R$ 9,0 mi",
+        "desc": "Art. 7: quem está na fila não tem alçada para esse valor"
+      },
+      {
+        "titulo": "Devolver ao solicitante",
+        "qtd": "18 pedidos",
+        "valor": "R$ 0,6 mi",
+        "desc": "Com a mensagem já escrita, o que corrigir e a base legal"
+      },
+      {
+        "titulo": "Descartar sem pagamento",
+        "qtd": "706 pedidos",
+        "valor": "R$ 47,6 mi",
+        "desc": "Teste, fila zumbi, despesa pré-aprovada, estorno do Art. 11"
+      }
+    ],
+    "rodape": "Ele não aprova e não paga. O Art. 4 chama segregação de funções de regra inviolável."
+  },
+  "s4": {
+    "eyebrow": "Antes x depois · mesma fila, mesmo dia",
+    "titulo": "O que mudou no GoService",
+    "colAntes": "Antes",
+    "colDepois": "Depois do Goworker",
+    "linhas": [
+      {
+        "rotulo": "Pedidos na mesa do diretor",
+        "antes": "1.071 sem triagem",
+        "depois": "222 já instruídos"
+      },
+      {
+        "rotulo": "Ações do agente no GoService",
+        "antes": "0",
+        "depois": "748 gravadas em 1 execução"
+      },
+      {
+        "rotulo": "Alçada conferida por valor (Art. 7)",
+        "antes": "nenhuma",
+        "depois": "234 roteamentos corrigidos"
+      },
+      {
+        "rotulo": "Tickets de teste na fila",
+        "antes": "106 — 23 já aprovados",
+        "depois": "106 encerrados"
+      },
+      {
+        "rotulo": "O que sustenta a decisão",
+        "antes": "1 linha de texto",
+        "depois": "dossiê + artigo da política"
+      },
+      {
+        "rotulo": "Causa raiz do roteamento errado",
+        "antes": "invisível",
+        "depois": "2 chamados abertos"
+      }
+    ],
+    "rodapeForte": "849 dos 1.071 pedidos (79%) saíram da fila sem consumir um minuto de diretor.",
+    "rodapeResto": "Os 222 que sobraram chegam prontos para decidir."
+  },
+  "s5": {
+    "eyebrow": "Resultados e próximos passos",
+    "titulo": "Está entregue. Agora escala",
+    "entregueLabel": "O que já está no ar",
+    "entregues": [
+      "PoC pronta e testada em produção",
+      "Agente operando: 748 ações no GoService",
+      "1 vaga congelada"
+    ],
+    "passos": [
+      {
+        "n": "01",
+        "titulo": "Melhoria contínua do agente",
+        "desc": "Calibrar regras com o time, fechar o loop de alçada e medir recusa de verdade"
+      },
+      {
+        "n": "02",
+        "titulo": "Goworkers nas demais atividades do financeiro",
+        "desc": "Mesmo motor, outro parser e outro conjunto de regras"
+      },
+      {
+        "n": "03",
+        "titulo": "O financeiro IA First",
+        "desc": "Máquina carrega a conferência; o humano só decide o que exige julgamento"
+      }
+    ],
+    "fecho": "Ele não decide pelo financeiro.",
+    "fechoDestaque": "Ele faz o financeiro decidir."
+  }
+}

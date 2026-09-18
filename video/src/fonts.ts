@@ -1,10 +1,11 @@
-import { continueRender, delayRender, staticFile } from "remotion";
+import { continueRender, delayRender } from "remotion";
+import { asset } from "./assets";
 
 const WEIGHTS = [400, 500, 600, 700, 800];
 
 const css = WEIGHTS.map(
   (w) => `@font-face{font-family:'Poppins';font-style:normal;font-weight:${w};
-  font-display:block;src:url('${staticFile(`fonts/Poppins-${w}.woff2`)}') format('woff2');}`,
+  font-display:block;src:url('${asset(`fonts/Poppins-${w}.woff2`)}') format('woff2');}`,
 ).join("\n");
 
 // A regra nº 1 da marca quebra em silencio quando a fonte nao carrega: o

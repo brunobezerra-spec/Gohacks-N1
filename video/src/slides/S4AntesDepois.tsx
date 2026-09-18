@@ -1,76 +1,83 @@
 import React from "react";
+import { T, useC } from "../conteudo";
 import { C } from "../theme";
-import { Card, Eyebrow, Frame, Title, useRise } from "../ui/kit";
+import { Card, Eyebrow, Frame, useRise } from "../ui/kit";
 
-const LINHAS = [
-  ["Pedidos na mesa do diretor", "1.071 sem triagem", "222 já instruídos"],
-  ["Ações do agente no GoService", "0", "748 gravadas em 1 execução"],
-  ["Alçada conferida por valor (Art. 7)", "nenhuma", "234 roteamentos corrigidos"],
-  ["Tickets de teste na fila", "106 — 23 já aprovados", "106 encerrados"],
-  ["O que sustenta a decisão", "1 linha de texto", "dossiê + artigo da política"],
-  ["Causa raiz do roteamento errado", "invisível", "2 chamados abertos"],
-];
-
-const Linha: React.FC<{ l: string[]; i: number }> = ({ l, i }) => {
+const Linha: React.FC<{ i: number }> = ({ i }) => {
   const r = useRise(14 + i * 7, 18);
   return (
     <div style={{ display: "flex", alignItems: "stretch", gap: 18, ...r }}>
-      <div style={{ flex: 1.15, color: C.blue, fontSize: 23, fontWeight: 600, display: "flex", alignItems: "center" }}>
-        {l[0]}
-      </div>
-      <div
+      <T
+        p={`s4.linhas.${i}.rotulo`}
+        bloco
+        style={{ flex: 1.15, color: C.blue, fontSize: 23, fontWeight: 600, display: "flex", alignItems: "center" }}
+      />
+      <T
+        p={`s4.linhas.${i}.antes`}
+        bloco
         style={{
           flex: 1, backgroundColor: "#e6dcc9", borderRadius: 16, padding: "24px 26px",
           color: "#7a6a52", fontSize: 24, fontWeight: 600, display: "flex", alignItems: "center",
         }}
-      >
-        {l[1]}
-      </div>
-      <div
+      />
+      <T
+        p={`s4.linhas.${i}.depois`}
+        bloco
         style={{
           flex: 1, backgroundColor: C.blue, borderRadius: 16, padding: "24px 26px",
           color: C.lima, fontSize: 24, fontWeight: 700, display: "flex", alignItems: "center",
         }}
-      >
-        {l[2]}
-      </div>
+      />
     </div>
   );
 };
 
 export const S4AntesDepois: React.FC = () => {
+  const c = useC().s4;
   const head = useRise(2);
   const cab = useRise(14);
   const foot = useRise(62);
 
   return (
     <Frame inner={C.off} border={C.blue} dots={C.blue} pill={null}>
-      <div style={{ position: "absolute", inset: 0, padding: "66px 92px 58px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+      <div
+        style={{
+          position: "absolute", inset: 0, padding: "66px 92px 58px",
+          display: "flex", flexDirection: "column", justifyContent: "space-between",
+        }}
+      >
         <div style={head}>
-          <Eyebrow color={C.blue}>Antes x depois · mesma fila, mesmo dia</Eyebrow>
-          <Title color={C.blue} size={58} style={{ marginTop: 14 }}>
-            O que mudou no GoService
-          </Title>
+          <Eyebrow color={C.blue}>
+            <T p="s4.eyebrow" />
+          </Eyebrow>
+          <T
+            p="s4.titulo"
+            bloco
+            style={{ color: C.blue, fontSize: 58, fontWeight: 800, lineHeight: 1.06, letterSpacing: "-0.02em", marginTop: 14 }}
+          />
         </div>
 
         <div>
-        <div style={{ display: "flex", gap: 18, marginBottom: 14, ...cab }}>
-          <div style={{ flex: 1.15 }} />
-          <Eyebrow color="#7a6a52" style={{ flex: 1, paddingLeft: 22 }}>Antes</Eyebrow>
-          <Eyebrow color={C.blue} style={{ flex: 1, paddingLeft: 22 }}>Depois do Goworker</Eyebrow>
-        </div>
+          <div style={{ display: "flex", gap: 18, marginBottom: 14, ...cab }}>
+            <div style={{ flex: 1.15 }} />
+            <Eyebrow color="#7a6a52" style={{ flex: 1, paddingLeft: 26 }}>
+              <T p="s4.colAntes" />
+            </Eyebrow>
+            <Eyebrow color={C.blue} style={{ flex: 1, paddingLeft: 26 }}>
+              <T p="s4.colDepois" />
+            </Eyebrow>
+          </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
-          {LINHAS.map((l, i) => (
-            <Linha key={l[0]} l={l} i={i} />
-          ))}
-        </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
+            {c.linhas.map((_, i) => (
+              <Linha key={i} i={i} />
+            ))}
+          </div>
         </div>
 
         <Card bg={C.lima} style={{ padding: "26px 32px", ...foot }}>
           <div style={{ color: C.blue, fontSize: 27, fontWeight: 700 }}>
-            849 dos 1.071 pedidos (79%) saíram da fila sem consumir um minuto de diretor.
-            <span style={{ fontWeight: 500 }}> Os 222 que sobraram chegam prontos para decidir.</span>
+            <T p="s4.rodapeForte" /> <T p="s4.rodapeResto" style={{ fontWeight: 500 }} />
           </div>
         </Card>
       </div>

@@ -1,47 +1,55 @@
 import React from "react";
-import { Img, interpolate, staticFile, useCurrentFrame } from "remotion";
+import { Img, interpolate, useCurrentFrame } from "remotion";
+import { asset } from "../assets";
+import { T, useC } from "../conteudo";
 import { C } from "../theme";
-import { Eyebrow, Frame, Title, useRise } from "../ui/kit";
+import { Eyebrow, Frame, useRise } from "../ui/kit";
 
 export const S1Hook: React.FC = () => {
+  const c = useC().s1;
   const frame = useCurrentFrame();
   const logo = useRise(4);
   const eyebrow = useRise(14);
-  const title = useRise(22);
-  const rule = interpolate(frame, [30, 46], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const titulo = useRise(22);
+  const regua = interpolate(frame, [30, 46], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const claim = useRise(46);
   const foot = useRise(60);
 
   return (
     <Frame>
       <div style={{ position: "absolute", inset: 0, padding: "0 110px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-        <Img src={staticFile("gogroup-wordmark-lima.png")} style={{ width: 268, marginBottom: 46, ...logo }} />
-        <Eyebrow style={eyebrow}>Goworker do financeiro</Eyebrow>
-        <Title size={92} style={{ marginTop: 22, maxWidth: 1400, ...title }}>
-          Transformar o financeiro
-          <br />
-          em <span style={{ color: C.lima }}>IA First</span>
-        </Title>
-
-        <div style={{ width: 1400 * rule, height: 5, backgroundColor: C.lima, borderRadius: 999, margin: "46px 0 38px" }} />
-
-        <div style={{ color: C.white, fontSize: 34, fontWeight: 500, lineHeight: 1.35, maxWidth: 1380, ...claim }}>
-          Nenhum real sai do Gogroup sem passar por uma checagem de máquina
-          <br />
-          antes de passar por uma assinatura humana.
+        <Img src={asset("gogroup-wordmark-lima.png")} style={{ width: 268, marginBottom: 46, ...logo }} />
+        <Eyebrow style={eyebrow}>
+          <T p="s1.eyebrow" />
+        </Eyebrow>
+        <div
+          style={{
+            color: C.white, fontSize: 92, fontWeight: 800, lineHeight: 1.06,
+            letterSpacing: "-0.02em", marginTop: 22, maxWidth: 1400, ...titulo,
+          }}
+        >
+          <T p="s1.titulo" bloco />
+          <T p="s1.tituloDestaque" bloco style={{ color: C.lima }} />
         </div>
 
+        <div style={{ width: 1400 * regua, height: 5, backgroundColor: C.lima, borderRadius: 999, margin: "46px 0 38px" }} />
+
+        <T
+          p="s1.claim"
+          bloco
+          style={{ color: C.white, fontSize: 34, fontWeight: 500, lineHeight: 1.35, maxWidth: 1380, ...claim }}
+        />
+
         <div style={{ display: "flex", gap: 14, marginTop: 54, ...foot }}>
-          {["Em produção no GoService", "748 ações gravadas", "1 vaga congelada"].map((t) => (
-            <div
-              key={t}
+          {c.selos.map((t, i) => (
+            <T
+              key={i}
+              p={`s1.selos.${i}`}
               style={{
                 border: `2px solid ${C.lima}`, color: C.lima, borderRadius: 999,
                 padding: "11px 26px", fontSize: 19, fontWeight: 600,
               }}
-            >
-              {t}
-            </div>
+            />
           ))}
         </div>
       </div>

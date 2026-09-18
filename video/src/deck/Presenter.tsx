@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Player, type PlayerRef } from "@remotion/player";
 import { AbsoluteFill } from "remotion";
 import "../fonts";
+import { ConteudoProvider } from "../conteudo";
 import { C, DUR, FONT, FPS } from "../theme";
 import { S1Hook } from "../slides/S1Hook";
 import { S2Status } from "../slides/S2Status";
@@ -17,8 +18,25 @@ const TITULOS = [
   "Antes x depois",
   "Resultados e próximos passos",
 ];
+const CHAVE = "deck.slide";
+const CHAVE_EDIT = "deck.editando";
 
-/** Um slide inteiro como composicao. As animacoes de entrada tocam ao chegar nele. */
+// Aberto direto do arquivo (file://) o sessionStorage pode simplesmente lançar.
+const lerSessao = (k: string) => {
+  try {
+    return sessionStorage.getItem(k);
+  } catch {
+    return null;
+  }
+};
+const gravarSessao = (k: string, v: string) => {
+  try {
+    sessionStorage.setItem(k, v);
+  } catch {
+    /* sem persistência: o deck funciona igual */
+  }
+};
+
 const Stage: React.FC<{ index: number }> = ({ index }) => {
   const S = SLIDES[index] ?? SLIDES[0];
   return (
@@ -29,11 +47,21 @@ const Stage: React.FC<{ index: number }> = ({ index }) => {
 };
 
 export const Presenter: React.FC = () => {
-  const [i, setI] = useState(0);
-  const [nonce, setNonce] = useState(0); // remonta o Player para repetir a entrada
-  const [dica, setDica] = useState(true);
-  const [ui, setUi] = useState(true); // navegacao some sozinha: nao pode cobrir o slide
+  // O slide atual sobrevive ao reload que o Vite faz quando o texto é salvo.
+  const [i, setI] = useState(() => Number(lerSessao(CHAVE) ?? 0));
+  const [nonce, setNonce] = useState(0);
+  // Salvar o texto faz o Vite recarregar a página: o modo edição precisa voltar junto.
+  const [editando, setEditando] = useState(() => lerSessao(CHAVE_EDIT) === "1");
+  const [ui, setUi] = useState(true);
   const player = useRef<PlayerRef>(null);
+
+  useEffect(() => {
+    gravarSessao(CHAVE, String(i));
+  }, [i]);
+
+  useEffect(() => {
+    gravarSessao(CHAVE_EDIT, editando ? "1" : "0");
+  }, [editando]);
 
   const ir = useCallback((n: number) => {
     setI((cur) => {
@@ -43,39 +71,52 @@ export const Presenter: React.FC = () => {
     });
   }, []);
 
+  // Editar exige o slide montado: o player pausa no último frame.
+  useEffect(() => {
+    const p = player.current;
+    if (!p) return;
+    if (editando) {
+      p.pause();
+      p.seekTo(DUR[i] - 1);
+    } else {
+      p.seekTo(0);
+      p.play();
+    }
+  }, [editando, i, nonce]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const alvo = e.target as HTMLElement | null;
+      const digitando = alvo?.isContentEditable;
+      if (e.key === "Escape") {
+        (alvo as HTMLElement)?.blur?.();
+        setEditando(false);
+        return;
+      }
+      if (digitando) return; // no campo, o teclado é do texto
       const k = e.key;
-      if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "Enter") {
+      if (k === "e" || k === "E") {
         e.preventDefault();
-        setDica(false);
-        setI((c) => {
-          const n = Math.min(SLIDES.length - 1, c + 1);
-          if (n !== c) setNonce((x) => x + 1);
-          return n;
-        });
+        setEditando((v) => !v);
+      } else if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "Enter") {
+        e.preventDefault();
+        ir(i + 1);
       } else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") {
         e.preventDefault();
-        setDica(false);
-        setI((c) => {
-          const n = Math.max(0, c - 1);
-          if (n !== c) setNonce((x) => x + 1);
-          return n;
-        });
+        ir(i - 1);
       } else if (k === "r" || k === "R") {
         setNonce((x) => x + 1);
       } else if (k === "f" || k === "F") {
         player.current?.requestFullscreen();
       } else if (/^[1-9]$/.test(k)) {
-        setDica(false);
         ir(Number(k) - 1);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ir]);
+  }, [i, ir]);
 
-  // A barra de navegacao reaparece ao mexer o mouse ou teclar, e some em 2,5 s.
+  // A barra de navegação some sozinha: não pode cobrir o slide.
   useEffect(() => {
     let t: ReturnType<typeof setTimeout>;
     const acorda = () => {
@@ -94,73 +135,86 @@ export const Presenter: React.FC = () => {
   }, [i]);
 
   const inputProps = useMemo(() => ({ index: i }), [i]);
+  const mostrarUi = ui || editando;
 
   return (
-    <div
-      style={{
-        position: "fixed", inset: 0, backgroundColor: C.blue, fontFamily: FONT,
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}
-      onClick={() => {
-        setDica(false);
-        setI((c) => {
-          const n = Math.min(SLIDES.length - 1, c + 1);
-          if (n !== c) setNonce((x) => x + 1);
-          return n;
-        });
-      }}
-    >
-      <Player
-        key={`${i}-${nonce}`}
-        ref={player}
-        component={Stage}
-        inputProps={inputProps}
-        durationInFrames={DUR[i]}
-        compositionWidth={1920}
-        compositionHeight={1080}
-        fps={FPS}
-        autoPlay
-        controls={false}
-        clickToPlay={false}
-        doubleClickToFullscreen
-        style={{ width: "100vw", height: "100vh" }}
-      />
-
-      {/* navegacao discreta, fora do slide */}
+    <ConteudoProvider editando={editando}>
       <div
         style={{
-          position: "fixed", bottom: 16, right: 22, display: "flex",
-          alignItems: "center", gap: 12, pointerEvents: "none",
-          opacity: ui ? 1 : 0, transition: "opacity 400ms",
+          position: "fixed", inset: 0, backgroundColor: C.blue, fontFamily: FONT,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}
+        onClick={(e) => {
+          // Em edição o clique é para escolher o texto, nunca para avançar.
+          if (editando) return;
+          if ((e.target as HTMLElement).closest("[data-nav]")) return;
+          ir(i + 1);
         }}
       >
-        <div style={{ display: "flex", gap: 7 }}>
-          {SLIDES.map((_, n) => (
-            <div
-              key={n}
-              style={{
-                width: 9, height: 9, borderRadius: 999,
-                backgroundColor: n === i ? C.lima : "rgba(255,255,255,0.35)",
-              }}
-            />
-          ))}
-        </div>
-        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: 600 }}>
-          {i + 1}/{SLIDES.length} · {TITULOS[i]}
-        </div>
-      </div>
+        <Player
+          key={`${i}-${nonce}`}
+          ref={player}
+          component={Stage}
+          inputProps={inputProps}
+          durationInFrames={DUR[i]}
+          compositionWidth={1920}
+          compositionHeight={1080}
+          fps={FPS}
+          autoPlay={!editando}
+          controls={false}
+          clickToPlay={false}
+          doubleClickToFullscreen={!editando}
+          style={{ width: "100vw", height: "100vh" }}
+        />
 
-      {dica ? (
+        {editando ? (
+          <div
+            data-nav
+            style={{
+              position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)",
+              backgroundColor: C.pink, color: C.white, borderRadius: 999,
+              padding: "9px 22px", fontSize: 14, fontWeight: 700, zIndex: 40,
+            }}
+          >
+            Modo edição · clique no texto, digite, clique fora para salvar · ESC sai
+          </div>
+        ) : null}
+
         <div
+          data-nav
+          style={{
+            position: "fixed", bottom: 16, right: 22, display: "flex",
+            alignItems: "center", gap: 12, pointerEvents: "none",
+            opacity: mostrarUi ? 1 : 0, transition: "opacity 400ms",
+          }}
+        >
+          <div style={{ display: "flex", gap: 7 }}>
+            {SLIDES.map((_, n) => (
+              <div
+                key={n}
+                style={{
+                  width: 9, height: 9, borderRadius: 999,
+                  backgroundColor: n === i ? C.lima : "rgba(255,255,255,0.35)",
+                }}
+              />
+            ))}
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: 600 }}>
+            {i + 1}/{SLIDES.length} · {TITULOS[i]}
+          </div>
+        </div>
+
+        <div
+          data-nav
           style={{
             position: "fixed", bottom: 16, left: 22, color: "rgba(255,255,255,0.6)",
             fontSize: 13, fontWeight: 500, pointerEvents: "none",
-            opacity: ui ? 1 : 0, transition: "opacity 400ms",
+            opacity: mostrarUi ? 1 : 0, transition: "opacity 400ms",
           }}
         >
-          → avança · ← volta · R repete a entrada · F tela cheia · 1-5 pula
+          → avança · ← volta · E edita o texto · R repete a entrada · F tela cheia · 1-5 pula
         </div>
-      ) : null}
-    </div>
+      </div>
+    </ConteudoProvider>
   );
 };

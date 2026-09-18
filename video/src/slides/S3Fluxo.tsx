@@ -1,7 +1,8 @@
 import React from "react";
 import { interpolate, useCurrentFrame } from "remotion";
+import { T, useC } from "../conteudo";
 import { C } from "../theme";
-import { Arrow, Card, Eyebrow, Frame, Title, useRise } from "../ui/kit";
+import { Arrow, Card, Eyebrow, Frame, useRise } from "../ui/kit";
 
 const SPINE_X = 1062;
 const CARD_X = 1132;
@@ -11,36 +12,15 @@ const CARD_GAP = 16;
 const CARD_TOP = 306;
 const centerY = (i: number) => CARD_TOP + i * (CARD_H + CARD_GAP) + CARD_H / 2;
 
-const DESTINOS = [
-  {
-    n: "1", titulo: "Encaminhar ao aprovador", qtd: "222 pedidos", valor: "R$ 7,6 mi",
-    desc: "Instruído: valor, CNPJ validado, alçada conferida e o artigo que sustenta",
-    bg: C.lima, fg: C.blue, sub: "#4a5a1f",
-  },
-  {
-    n: "2", titulo: "Rotear para o aprovador certo", qtd: "125 pedidos", valor: "R$ 9,0 mi",
-    desc: "Art. 7: quem está na fila não tem alçada para esse valor",
-    bg: C.cyan, fg: C.blue, sub: "#14425e",
-  },
-  {
-    n: "3", titulo: "Devolver ao solicitante", qtd: "18 pedidos", valor: "R$ 0,6 mi",
-    desc: "Com a mensagem já escrita, o que corrigir e a base legal",
-    bg: C.orange, fg: C.blue, sub: "#6b4708",
-  },
-  {
-    n: "4", titulo: "Descartar sem pagamento", qtd: "706 pedidos", valor: "R$ 47,6 mi",
-    desc: "Teste, fila zumbi, despesa pré-aprovada, estorno do Art. 11",
-    bg: C.red, fg: C.white, sub: "#ffd9d1",
-  },
+// A cor de cada destino é da marca, não do conteúdo: fica no código de propósito.
+const CORES = [
+  { bg: C.lima, fg: C.blue, sub: "#4a5a1f" },
+  { bg: C.cyan, fg: C.blue, sub: "#14425e" },
+  { bg: C.orange, fg: C.blue, sub: "#6b4708" },
+  { bg: C.red, fg: C.white, sub: "#ffd9d1" },
 ];
 
-const PASSOS = [
-  ["Lê o pedido", "título, fornecedor, CNPJ, valor, vencimento"],
-  ["Compara com a política", "Art. 4 ao 12, Anexos I e II"],
-  ["Checa consistência", "23 regras: dígito verificador, duplicidade, autoaprovação, fila zumbi"],
-];
-
-const Passo: React.FC<{ i: number; t: string; d: string }> = ({ i, t, d }) => {
+const Passo: React.FC<{ i: number }> = ({ i }) => {
   const r = useRise(38 + i * 11, 14);
   return (
     <div style={{ display: "flex", gap: 16, alignItems: "flex-start", ...r }}>
@@ -54,14 +34,19 @@ const Passo: React.FC<{ i: number; t: string; d: string }> = ({ i, t, d }) => {
         {i + 1}
       </div>
       <div>
-        <div style={{ color: C.white, fontSize: 25, fontWeight: 700, lineHeight: 1.15 }}>{t}</div>
-        <div style={{ color: "#c4d5ef", fontSize: 17, fontWeight: 400, marginTop: 5, lineHeight: 1.3 }}>{d}</div>
+        <T p={`s3.passos.${i}.titulo`} bloco style={{ color: C.white, fontSize: 25, fontWeight: 700, lineHeight: 1.15 }} />
+        <T
+          p={`s3.passos.${i}.desc`}
+          bloco
+          style={{ color: "#c4d5ef", fontSize: 17, fontWeight: 400, marginTop: 5, lineHeight: 1.3 }}
+        />
       </div>
     </div>
   );
 };
 
-const Destino: React.FC<{ d: (typeof DESTINOS)[number]; i: number }> = ({ d, i }) => {
+const Destino: React.FC<{ i: number }> = ({ i }) => {
+  const d = CORES[i];
   const delay = 82 + i * 11;
   const r = useRise(delay + 4, 0);
   return (
@@ -76,18 +61,19 @@ const Destino: React.FC<{ d: (typeof DESTINOS)[number]; i: number }> = ({ d, i }
           transform: `translateX(${(1 - r.opacity) * 26}px)`,
         }}
       >
-        <div style={{ color: d.fg, fontSize: 30, fontWeight: 800, letterSpacing: "-0.01em" }}>{d.titulo}</div>
+        <T p={`s3.destinos.${i}.titulo`} bloco style={{ color: d.fg, fontSize: 30, fontWeight: 800, letterSpacing: "-0.01em" }} />
         <div style={{ display: "flex", gap: 18, alignItems: "baseline", marginTop: 8 }}>
-          <div style={{ color: d.fg, fontSize: 27, fontWeight: 700 }}>{d.qtd}</div>
-          <div style={{ color: d.fg, fontSize: 24, fontWeight: 600, opacity: 0.8 }}>{d.valor}</div>
+          <T p={`s3.destinos.${i}.qtd`} style={{ color: d.fg, fontSize: 27, fontWeight: 700 }} />
+          <T p={`s3.destinos.${i}.valor`} style={{ color: d.fg, fontSize: 24, fontWeight: 600, opacity: 0.8 }} />
         </div>
-        <div style={{ color: d.sub, fontSize: 17, fontWeight: 500, marginTop: 8, lineHeight: 1.25 }}>{d.desc}</div>
+        <T p={`s3.destinos.${i}.desc`} bloco style={{ color: d.sub, fontSize: 17, fontWeight: 500, marginTop: 8, lineHeight: 1.25 }} />
       </div>
     </>
   );
 };
 
 export const S3Fluxo: React.FC = () => {
+  const c = useC().s3;
   const frame = useCurrentFrame();
   const head = useRise(2);
   const badge = useRise(10);
@@ -99,36 +85,34 @@ export const S3Fluxo: React.FC = () => {
 
   return (
     <Frame inner={C.off} border={C.blue} dots={C.blue} pill={null}>
-      {/* cabecalho */}
       <div style={{ position: "absolute", top: 72, left: 92, ...head }}>
-        <Eyebrow color={C.blue}>O que entregamos</Eyebrow>
-        <Title color={C.blue} size={56} style={{ marginTop: 14 }}>
-          Uma peneira entre quem pede e quem assina
-        </Title>
+        <Eyebrow color={C.blue}>
+          <T p="s3.eyebrow" />
+        </Eyebrow>
+        <T
+          p="s3.titulo"
+          bloco
+          style={{ color: C.blue, fontSize: 56, fontWeight: 800, lineHeight: 1.06, letterSpacing: "-0.02em", marginTop: 14 }}
+        />
       </div>
       <Card bg={C.blue} style={{ position: "absolute", top: 66, right: 92, width: 330, padding: "20px 24px", ...badge }}>
-        <div style={{ color: C.lima, fontSize: 52, fontWeight: 800, lineHeight: 1 }}>79%</div>
-        <div style={{ color: C.white, fontSize: 17, fontWeight: 500, marginTop: 6, lineHeight: 1.3 }}>
-          da fila nunca chega à mesa do diretor
-        </div>
+        <T p="s3.badgeValor" bloco style={{ color: C.lima, fontSize: 52, fontWeight: 800, lineHeight: 1 }} />
+        <T p="s3.badgeLabel" bloco style={{ color: C.white, fontSize: 17, fontWeight: 500, marginTop: 6, lineHeight: 1.3 }} />
       </Card>
 
-      {/* origem */}
       <Card
         bg={C.white}
-        style={{
-          position: "absolute", left: 92, top: 540, width: 250, padding: 24,
-          border: `3px solid ${C.blue}`, ...origem,
-        }}
+        style={{ position: "absolute", left: 92, top: 540, width: 250, padding: 24, border: `3px solid ${C.blue}`, ...origem }}
       >
-        <Eyebrow color={C.blue} style={{ fontSize: 15 }}>Solicitante</Eyebrow>
-        <div style={{ color: C.blue, fontSize: 44, fontWeight: 800, marginTop: 10, lineHeight: 1 }}>1.071</div>
-        <div style={{ color: "#3c4a5e", fontSize: 16, fontWeight: 500, marginTop: 6 }}>pedidos parados</div>
-        <div style={{ color: C.red, fontSize: 22, fontWeight: 700, marginTop: 12 }}>R$ 64,8 mi</div>
+        <Eyebrow color={C.blue} style={{ fontSize: 15 }}>
+          <T p="s3.origemLabel" />
+        </Eyebrow>
+        <T p="s3.origemValor" bloco style={{ color: C.blue, fontSize: 44, fontWeight: 800, marginTop: 10, lineHeight: 1 }} />
+        <T p="s3.origemNota" bloco style={{ color: "#3c4a5e", fontSize: 16, fontWeight: 500, marginTop: 6 }} />
+        <T p="s3.origemValorRs" bloco style={{ color: C.red, fontSize: 22, fontWeight: 700, marginTop: 12 }} />
       </Card>
       <Arrow x={356} y={630} w={78} color={C.blue} delay={24} />
 
-      {/* motor */}
       <div
         style={{
           position: "absolute", left: 450, top: 300, width: 560, bottom: 120,
@@ -136,27 +120,26 @@ export const S3Fluxo: React.FC = () => {
           border: `4px solid ${C.lima}`, display: "flex", flexDirection: "column", ...motor,
         }}
       >
-        <Eyebrow>Funcionário de IA</Eyebrow>
-        <div style={{ color: C.white, fontSize: 46, fontWeight: 800, marginTop: 8, letterSpacing: "-0.02em" }}>
-          Goworker
-        </div>
+        <Eyebrow>
+          <T p="s3.motorEyebrow" />
+        </Eyebrow>
+        <T p="s3.motorNome" bloco style={{ color: C.white, fontSize: 46, fontWeight: 800, marginTop: 8, letterSpacing: "-0.02em" }} />
         <div style={{ height: 3, backgroundColor: C.lima, borderRadius: 999, margin: "22px 0 26px", opacity: 0.5 }} />
         <div style={{ display: "flex", flexDirection: "column", gap: 24, flex: 1 }}>
-          {PASSOS.map(([t, d], i) => (
-            <Passo key={t} i={i} t={t} d={d} />
+          {c.passos.map((_, i) => (
+            <Passo key={i} i={i} />
           ))}
         </div>
-        <div
+        <T
+          p="s3.motorRodape"
+          bloco
           style={{
             backgroundColor: C.lima, color: C.blue, borderRadius: 999, padding: "12px 22px",
             fontSize: 17, fontWeight: 700, textAlign: "center", marginTop: 20,
           }}
-        >
-          Uma decisão por pedido, todo dia, às 09h15
-        </div>
+        />
       </div>
 
-      {/* divisor */}
       <Arrow x={1016} y={630} w={40} color={C.blue} delay={68} thickness={5} />
       <div
         style={{
@@ -165,20 +148,15 @@ export const S3Fluxo: React.FC = () => {
         }}
       />
 
-      {/* destinos */}
-      {DESTINOS.map((d, i) => (
-        <Destino key={d.n} d={d} i={i} />
+      {c.destinos.map((_, i) => (
+        <Destino key={i} i={i} />
       ))}
 
-      {/* rodape */}
-      <div
-        style={{
-          position: "absolute", left: 92, bottom: 62, width: 310,
-          color: C.blue, fontSize: 17, fontWeight: 500, lineHeight: 1.35,
-        }}
-      >
-        Ele não aprova e não paga. O Art. 4 chama segregação de funções de regra inviolável.
-      </div>
+      <T
+        p="s3.rodape"
+        bloco
+        style={{ position: "absolute", left: 92, bottom: 62, width: 310, color: C.blue, fontSize: 17, fontWeight: 500, lineHeight: 1.35 }}
+      />
     </Frame>
   );
 };

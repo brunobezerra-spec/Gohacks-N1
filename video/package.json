@@ -25,14 +25,15 @@
     "vite": "^8.3.0"
   },
   "scripts": {
-    "deck": "vite",
+    "deck": "vite --open",
     "deck:build": "vite build",
     "deck:preview": "vite preview --outDir dist-deck",
     "studio": "remotion studio",
     "render": "remotion render Deck out/goworker-financeiro.mp4",
     "slides": "remotion still",
     "lint": "eslint src && tsc",
-    "upgrade": "remotion upgrade"
+    "upgrade": "remotion upgrade",
+    "deck:html": "node scripts/build-single.mjs"
   },
   "sideEffects": [
     "*.css"

@@ -12,7 +12,7 @@ Fontes conferidas:
 |---|---|---|---|
 | **Art. 4** | Segregação de funções é **regra inviolável**: ninguém acumula solicitar, aprovar e executar | Bloqueia e devolve. E **por isso o próprio agente não aprova nem recusa** | **7 pedidos** onde solicitante = aprovador |
 | **Art. 5** | Nenhum pagamento sem documentação; vedado pagar em conta de terceiro que não seja o fornecedor cadastrado | Devolve ao solicitante com o motivo | **11** com nome divergente do CNPJ; **14** sem favorecido identificável |
-| **Art. 6** | CAP confere fornecedor, CNPJ, valor e vencimento; divergência volta ao requisitante | Confere CNPJ/CPF por dígito verificador e **corrige sozinho** quando a base tem a grafia certa | **4** corrigidos automaticamente, **4** devolvidos |
+| **Art. 6** | CAP confere fornecedor, CNPJ, valor e vencimento; divergência volta ao requisitante | Confere CNPJ/CPF por dígito verificador, **corrige sozinho** quando a base tem a grafia certa, e desde 18/09/2026 **abre o anexo e confere o valor contra o documento** | **4** corrigidos automaticamente, **4** devolvidos. Na conferência ao vivo, **6 de 8** chamados tinham o valor do pedido 100x o do anexo |
 | **Art. 7** | Alçadas: ≤20k Gerente, 20-50k Diretor, >50k Sócio. Solicitante nunca é aprovador | Roteia para o nível certo usando o cargo real de 36 aprovadores (Teamguide) | **32 reroteados**. **6 aprovadores são analista ou coordenador** e não têm alçada nenhuma |
 | **Art. 8** | 5 dias úteis da aprovação: 2 de lançamento fiscal + 3 de programação | Calcula em dias úteis, com feriados nacionais | Entra no plano de CAP de cada pedido |
 | **Art. 9** | Pagamento nos dias 10, 20 e 30; fora do prazo vai para o próximo ciclo | Monta o lote no ciclo correto | 491 pedidos programáveis |
@@ -42,11 +42,11 @@ linha quando o financeiro decidir qual vale. **Isso precisa ser resolvido por ge
 
 Todos por falta de dado, não de lógica:
 
-1. **Alçada por valor (Art. 7)** só roda de verdade quando o valor do documento for legível. Hoje o agente só pega o caso em que o aprovador não tem alçada *nenhuma*.
-2. **Documento vencido (Art. 8)** exige a data de vencimento, que não é legível.
+1. **Alçada por valor (Art. 7)** depende do valor certo. O anexo passou a dar essa leitura quando existe e é legível, então a checagem já não é cega; onde não há anexo legível o agente continua só pegando o caso em que o aprovador não tem alçada *nenhuma*.
+2. **Documento vencido (Art. 8)** exige a data de vencimento. O agente já compara a data de emissão da nota anexada com o vencimento informado e sinaliza quando a nota é posterior, mas só nos pedidos com anexo legível.
 3. **Conta bancária do favorecido (Art. 5)** não está no registro de aprovação.
 4. **Anexo II** só é detectável pelo título, que é pobre: 8 achados contra os 17 que uma varredura mais solta sugere. Com o campo de categoria ou centro de custo, vira exato.
-5. **Playbook fiscal**: 31 das 38 regras dependem de XML da NF, CFOP, pedido de compra ou saldo — nada disso está no GoService hoje.
+5. **Playbook fiscal**: 31 das 38 regras dependem de XML da NF, CFOP, pedido de compra ou saldo. O XML da NFe anexada passou a ser lido (valor, CNPJ do emitente e do destinatário, número e data), o que destrava parte disso; CFOP, pedido de compra e saldo continuam fora do GoService.
 
 ## Onde o agente para, de propósito
 
