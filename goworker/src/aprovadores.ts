@@ -37,5 +37,16 @@ export const NIVEIS_APROVADORES: Record<string,string> = {
  "carlos.feitosa": "DESCONHECIDO",
  "anderson.matos": "DESCONHECIDO",
  "vitoria.azevedo": "COORDENADOR",
- "nort.furlani": "DESCONHECIDO"
+ "nort.furlani": "DESCONHECIDO",
+ // Acrescentados em 18/09/2026 apos o teste do pedido 143038: constam no
+ // Teamguide com cargo, mas estavam fora deste mapa, entao o Art. 7 nunca era
+ // checado para eles. Eram 47 pendentes, R$ 2,65 mi -- inclusive o aprovador
+ // do piloto, que e Diretor Financeiro.
+ "vinicius.nishide": "DIRETOR",      // Diretor Financeiro
+ "rogerio.azbuy": "SOCIO",           // Socio
+ "kamilly.silva": "ANALISTA",        // Analista Juridico JR I
+ "lucas.fernandes": "ANALISTA",      // Analista Financeiro JR II
+ "izabelly.machado": "ANALISTA",     // Estagiario Financeiro
+ "joaovictor.esteves": "ANALISTA",   // Analista de RPA PL
+ "luciano.cavalcante": "ANALISTA"    // Assistente de RPA Financeiro III
 };

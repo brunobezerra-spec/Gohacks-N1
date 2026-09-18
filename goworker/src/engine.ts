@@ -160,6 +160,14 @@ export function obrigacaoKey(r) {
 
 // ---------------------------------------------------------------- enriquecimento
 
+// Login canonico: minusculo, sem espaco e sem o dominio do e-mail.
+const login = (v) => {
+  const t = String(v ?? '').trim().toLowerCase();
+  if (!t) return null;
+  const at = t.indexOf('@');
+  return (at > 0 ? t.slice(0, at) : t) || null;
+};
+
 export function enrich(records) {
   return records.map(r => {
     const p = parseTitle(r.paymentRequestTitle);
@@ -171,8 +179,12 @@ export function enrich(records) {
     return {
       id: r.validationId,
       status: r.statusLabel,
-      approver: (r.approver || '').trim().toLowerCase() || null,
-      requester: (r.requester || '').trim().toLowerCase() || null,
+      // O GLPI grava o aprovador ora como login ("carla.alencar"), ora como
+      // e-mail ("carla.alencar@gobeaute.com.br"). Sem cortar o dominio, a
+      // segunda forma nao casava com NIVEIS_APROVADORES e a checagem de alcada
+      // do Art. 7 era pulada em silencio: 58 pendentes, R$ 911 mil.
+      approver: login(r.approver),
+      requester: login(r.requester),
       title: p.title,
       kind: p.kind,
       money: p.money,

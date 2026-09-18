@@ -252,5 +252,39 @@ console.log('\n== 11. migracao de schema antigo (env.DB sobrevive a updateApp) =
   ok('linha velha some apos migracao', q.every(x => x.action !== 'VELHO') && q.length === contaTrabalho(r => r.action === 'BLOQUEAR'), q.length);
 }
 
+console.log('\n== login canonico do aprovador (Art. 7 nao pode ser pulado) ==');
+{
+  // O GLPI grava o mesmo aprovador ora como login, ora como e-mail. Se as duas
+  // formas nao colapsarem, a alcada nao e checada e o pedido passa limpo.
+  const base = {
+    validationId: 1, ticketId: 1, statusLabel: 'Aguardando',
+    submissionDate: '2026-09-10 10:00:00', validationDate: null,
+    paymentRequestTitle: 'Solicitacao de pagamento : ACME LTDA 11.222.333/0001-81 ',
+    fornecedor: 'ACME LTDA', valor: 100, vencimento: '2026-10-01',
+  };
+  const e = L.engine.enrich([
+    { ...base, approver: 'Carla.Alencar@gobeaute.com.br', requester: 'X.Y@gocase.com.br' },
+    { ...base, validationId: 2, approver: ' carla.alencar ' },
+  ]);
+  ok('e-mail do aprovador vira login', e[0].approver === 'carla.alencar', e[0].approver);
+  ok('as duas grafias colapsam no mesmo login', e[0].approver === e[1].approver, e[1].approver);
+  ok('solicitante tambem e canonizado', e[0].requester === 'x.y', e[0].requester);
+}
+
+console.log('\n== aprovador do piloto tem nivel declarado ==');
+{
+  const src = (await import('node:fs')).readFileSync('src/aprovadores.ts', 'utf8');
+  const niv = {};
+  for (const m of src.matchAll(/"([a-z0-9._-]+)":\s*"(SOCIO|DIRETOR|GERENTE|COORDENADOR|ANALISTA|DESCONHECIDO)"/g)) niv[m[1]] = m[2];
+  ok('vinicius.nishide mapeado como DIRETOR', niv['vinicius.nishide'] === 'DIRETOR', niv['vinicius.nishide']);
+  // Todo login que o Teamguide conhece com cargo precisa ter nivel aqui, senao
+  // o Art. 7 e pulado em silencio para ele.
+  const tg = (await import('node:fs')).readFileSync('src/teamguide.ts', 'utf8');
+  const semNivel = [];
+  for (const m of tg.matchAll(/"([a-z0-9._-]+)":\s*\{\s*"ativo":\s*true,\s*"nome":\s*"[^"]*",\s*"cargo":\s*"[^"]*"/g))
+    if (!niv[m[1]]) semNivel.push(m[1]);
+  ok('nenhum ativo do Teamguide fica sem nivel', semNivel.length === 0, semNivel.join(','));
+}
+
 console.log(`\n${'='.repeat(46)}\nPASS ${pass}  FAIL ${fail}\n${'='.repeat(46)}`);
 process.exit(fail ? 1 : 0);
