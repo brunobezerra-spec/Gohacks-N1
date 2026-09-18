@@ -157,18 +157,25 @@ console.log('\n== 12. EXECUCAO no GoService/GLPI ==');
     const url = String(u); chamadas.push({url, metodo: o.method||'GET'});
     if (url.includes('initSession')) return new Response(JSON.stringify({session_token:'sess123'}),{status:200});
     if (url.includes('killSession')) return new Response('{}',{status:200});
-    if (/TicketValidation\/\d+$/.test(url) && (o.method||'GET')==='GET')
-      return new Response(JSON.stringify({tickets_id:77777,users_id_validate:42,status:2,users_id:9}),{status:200});
+    // lerAprovacao usa a COLECAO filtrada (o GET individual da 403 no GLPI real)
+    const mId = url.match(/searchText%5Bid%5D=(\d+)/);
+    if (url.includes('TicketValidation/?') && mId)
+      return new Response(JSON.stringify([{id:Number(mId[1]),tickets_id:77777,users_id_validate:12,status:2,users_id:9}]),{status:200});
     return new Response('{"id":1}',{status:201});
   };
   const envC = { DB: env.DB, GLPI_APP_TOKEN:'app', GLPI_USER_TOKEN:'user' };
   const callC = (p,o={}) => worker.fetch(new Request('https://t.local'+p,o), envC);
   e = await j(await callC('/api/agente/executar',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"42"}'}));
+    headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"12"}'}));
   ok('ensaio nao executa', e.modo==='ensaio' && e.executadas===0, JSON.stringify({m:e.modo,x:e.executadas}));
-  ok('ensaio monta a chamada exata', e.resultados.every(r=>r.chamada?.url && r.chamada?.metodo),
-     JSON.stringify(e.resultados[0]?.chamada||{}).slice(0,120));
-  ok('ensaio resolve o ticket a partir da aprovacao', e.resultados.every(r=>r.ticketId===77777));
+  // Ordens que nao viram chamada (fora do piloto, sem destino de alcada) sao
+  // resultado legitimo: a checagem e sobre as que o agente de fato montou.
+  const montadas = e.resultados.filter(r => r.status === 'ensaio');
+  ok('ensaio montou pelo menos uma chamada', montadas.length > 0,
+     e.resultados.map(r=>r.status).join(','));
+  ok('toda chamada montada tem metodo e url', montadas.every(r=>r.chamada?.url && r.chamada?.metodo),
+     JSON.stringify(montadas.find(r=>!r.chamada)||{}).slice(0,120));
+  ok('ensaio resolve o ticket a partir da aprovacao', montadas.every(r=>r.ticketId===77777));
   ok('nenhum POST de escrita saiu em ensaio',
      !chamadas.some(c=>c.metodo!=='GET' && !/initSession|killSession/.test(c.url)),
      chamadas.filter(c=>c.metodo!=='GET').map(c=>c.metodo+' '+c.url.split('apirest.php')[1]).join(' | '));
@@ -178,16 +185,18 @@ console.log('\n== 12. EXECUCAO no GoService/GLPI ==');
   chamadas.length=0;
   e = await j(await callC('/api/agente/executar',{method:'POST',
     headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"999"}'}));
-  ok('piloto filtra quem nao e do escopo', e.resultados.every(r=>r.status==='fora_do_piloto'),
-     e.resultados.map(r=>r.status).join(','));
+  // piloto sem fila: o agente nem consulta o GLPI, devolve cedo
+  ok('piloto sem fila nao gera ordem', e.total===0 && /Nenhum pedido parado/.test(e.aviso||''),
+     JSON.stringify({t:e.total,a:e.aviso}).slice(0,120));
 
   // modo executar: agora sim escreve, e so nos endpoints permitidos
   chamadas.length=0;
   const envX = { ...envC, GLPI_MODO:'executar' };
   const callX = (p,o={}) => worker.fetch(new Request('https://t.local'+p,o), envX);
   e = await j(await callX('/api/agente/executar',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"42"}'}));
-  ok('modo executar escreve', e.modo==='executar' && e.executadas>0, JSON.stringify({m:e.modo,x:e.executadas}));
+    headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"12"}'}));
+  ok('modo executar escreve', e.modo==='executar' && e.executadas>0,
+     JSON.stringify({m:e.modo,x:e.executadas,st:e.resultados.map(r=>r.status)}));
   const escritas = chamadas.filter(c=>c.metodo!=='GET');
   ok('escreveu so em ITILFollowup / ITILSolution / TicketValidation',
      escritas.every(c=>/ITILFollowup|ITILSolution|TicketValidation/.test(c.url)),
@@ -213,6 +222,22 @@ for (const [nome, input] of [
   ok('bloqueia '+nome, bloqueou);
 }
 ok('permite trocar quem valida', (()=>{ try{L.glpi.assertNaoEhAprovacao({id:1,users_id_validate:9});return true}catch{return false} })());
+
+console.log('\n== 13b. TRAVA: lista branca de endpoints de escrita ==');
+for (const [m,c,esperado] of [
+  ['POST','/ITILFollowup/',true],
+  ['POST','/ITILSolution/',true],
+  ['PUT','/TicketValidation/123',true],
+  ['PUT','/Ticket/23119',false],          // mudar status de chamado nao e ato do agente
+  ['POST','/Ticket/',false],
+  ['DELETE','/Ticket/1',false],
+  ['PUT','/TicketValidation/',false],
+  ['POST','/ITILSolution',false],
+]) {
+  let passou=false;
+  try { L.glpi.assertEndpointPermitido(m,c); passou=true; } catch {}
+  ok((esperado?'permite ':'BLOQUEIA ')+m+' '+c, passou===esperado);
+}
 
 console.log('\n== 14. matriz x filial ==');
 {

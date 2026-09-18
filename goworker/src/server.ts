@@ -238,6 +238,7 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
       p.push(r.id,
         JSON.stringify({
           run_id: rid, action: r.action, prioridade: r.prioridade, approver: r.approver,
+          usersIdValidate: r.usersIdValidate ?? null, ticketId: r.ticketId ?? null, valor: r.valor ?? null,
           kind: r.kind, codes: r.findings.map((f: any) => f.code).join(","), acao_ag: x.acao ?? null,
           // motor
           action_label: r.actionLabel, why: r.why, risk: r.risk, age_days: r.ageDays === null ? null : Math.round(r.ageDays * 10) / 10,
@@ -465,6 +466,19 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
   // CORRIGIR_CADASTRO fica de fora: corrigir CNPJ em cadastro de fornecedor e
   // ato do Supply/Compras no ERP, nao do agente no chamado.
   w.push("tipo <> 'CORRIGIR_CADASTRO'");
+
+  // O escopo do piloto entra NA CONSULTA. Filtrar depois de ler as 20 primeiras
+  // fazia o agente gastar o lote inteiro com pedidos de outro aprovador.
+  if (piloto) {
+    const alvo = await env.DB.query(
+      "SELECT approval_id FROM triage WHERE json_extract(doc,'$.usersIdValidate') = ?", [Number(piloto)]);
+    const ids = (alvo.rows ?? []).map((x: any) => Number(x.approval_id));
+    console.log(`[glpi] piloto ${piloto}: ${ids.length} pedidos na fila dele`);
+    if (!ids.length) return { modo: modoGlpi(env), piloto, executadas: 0, total: 0, resultados: [],
+      aviso: `Nenhum pedido parado para o aprovador ${piloto}.` };
+    w.push(`pedido_id IN (${ids.map(() => "?").join(",")})`);
+    p.push(...ids);
+  }
   p.push(Math.min(o.max ?? 20, 100));
   const r = await env.DB.query(
     `SELECT id, tipo, pedido_id, doc FROM outbox
@@ -481,7 +495,13 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
     };
   });
 
+  console.log(`[glpi] modo=${modoGlpi(env)} piloto=${piloto ?? "(nenhum)"} ordens=${ordens.length} credencial=${credenciaisOk(env)}`);
   const out = await executarGlpi(env, ordens as any, { piloto });
+  const porStatus: Record<string, number> = {};
+  for (const r of out.resultados) porStatus[r.status] = (porStatus[r.status] ?? 0) + 1;
+  console.log(`[glpi] resultado ${JSON.stringify(porStatus)} erro=${out.erro ?? "-"}`);
+  for (const r of out.resultados.filter((x: any) => x.status === "executada" || x.status === "falhou" || x.status === "ensaio").slice(0, 12))
+    console.log(`[glpi]   val=${r.validationId} tk=${r.ticketId ?? "-"} ${r.tipo} -> ${r.status} ${r.chamada ? r.chamada.metodo + " " + r.chamada.url : ""} ${r.httpStatus ?? ""} ${String(r.resposta ?? "").slice(0, 90)}`);
 
   for (let i = 0; i < out.resultados.length; i++) {
     const res = out.resultados[i], linha = linhas[i];

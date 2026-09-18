@@ -14,6 +14,32 @@
 
 const GLPI_BASE = "https://goservice.gocase.com.br/apirest.php";
 
+// LISTA BRANCA DE ENDPOINTS DE ESCRITA. Tudo que nao esta aqui e recusado antes
+// de virar requisicao. Em 18/09/2026 um teste manual meu usou PUT /Ticket/{id}
+// para mudar o status de um chamado real (23119) e funcionou. O agente nao pode
+// ter esse poder: mudar status de chamado nao e ato dele.
+const ESCRITA_PERMITIDA: { metodo: string; re: RegExp; oque: string }[] = [
+  { metodo: "POST", re: /^\/ITILFollowup\/$/,          oque: "comentar no chamado (devolver ao solicitante)" },
+  { metodo: "POST", re: /^\/ITILSolution\/$/,           oque: "registrar solucao (encerrar o que nao deveria existir)" },
+  { metodo: "PUT",  re: /^\/TicketValidation\/\d+$/,    oque: "trocar QUEM valida, campo users_id_validate" },
+];
+
+export function assertEndpointPermitido(metodo: string, caminho: string) {
+  const ok = ESCRITA_PERMITIDA.some(e => e.metodo === metodo.toUpperCase() && e.re.test(caminho));
+  if (!ok) throw new Error(
+    `TRAVA: ${metodo} ${caminho} nao esta na lista branca de escrita do agente. ` +
+    `Permitidos: ${ESCRITA_PERMITIDA.map(e => e.metodo + " " + e.re.source).join(", ")}.`);
+  return true;
+}
+
+// Toda escrita passa por aqui. Nao existe outro caminho para o GLPI no modulo.
+async function escrever(env: GlpiEnv, session: string, metodo: "POST" | "PUT", caminho: string, body: unknown) {
+  assertEndpointPermitido(metodo, caminho);
+  const r = await fetch(`${GLPI_BASE}${caminho}`, { method: metodo, headers: H(env, session), body: JSON.stringify(body) });
+  const txt = await r.text();
+  return { ok: r.status === 200 || r.status === 201, status: r.status, resposta: txt.slice(0, 300) };
+}
+
 export const STATUS_GLPI = { NOVO: 1, ATRIBUIDO: 2, PLANEJADO: 3, PENDENTE: 4, SOLUCIONADO: 5, FECHADO: 6 };
 
 // Campos que, se presentes num PUT de TicketValidation, mudariam o VEREDITO.
@@ -36,8 +62,12 @@ export function credenciaisOk(env: GlpiEnv) {
 }
 // Modo de execucao. Sem GLPI_MODO=executar, tudo roda em ensaio: monta a
 // chamada inteira, valida a trava, e NAO envia. Ligar e uma decisao explicita.
+// O valor do secret aparece censurado nos logs da plataforma. Com GLPI_MODO
+// valendo a palavra "executar", toda mensagem do GLPI que continha essa palavra
+// virava [REDACTED] e o log ficava ilegivel. Por isso o valor esperado e "on".
 export function modo(env: GlpiEnv) {
-  return env.GLPI_MODO === "executar" ? "executar" : "ensaio";
+  const v = String(env.GLPI_MODO ?? "").toLowerCase();
+  return (v === "on" || v === "executar" || v === "ligado") ? "executar" : "ensaio";
 }
 
 async function initSession(env: GlpiEnv) {
@@ -62,11 +92,17 @@ const H = (env: GlpiEnv, session: string) => ({
 
 // A aprovacao (TicketValidation) e o chamado (Ticket) sao objetos diferentes.
 // Precisamos do tickets_id para comentar e encerrar.
+// ATENCAO: GET /TicketValidation/{id} devolve 403 com este perfil, mas a COLECAO
+// filtrada por searchText[id] devolve o registro. O perfil enxerga por listagem,
+// nao por item. Mesma coisa em Ticket: /Ticket/{id} pode dar 403 mesmo quando a
+// escrita no chamado e aceita.
 export async function lerAprovacao(env: GlpiEnv, session: string, validationId: number) {
-  const r = await fetch(`${GLPI_BASE}/TicketValidation/${validationId}`, {
+  const r = await fetch(`${GLPI_BASE}/TicketValidation/?range=0-1&searchText%5Bid%5D=${validationId}`, {
     headers: { "App-Token": env.GLPI_APP_TOKEN!, "Session-Token": session } });
   if (!r.ok) return { ok: false, status: r.status, erro: (await r.text()).slice(0, 200) };
-  const d: any = await r.json();
+  const arr: any = await r.json().catch(() => null);
+  const d = Array.isArray(arr) ? arr.find((x: any) => Number(x?.id) === validationId) : null;
+  if (!d) return { ok: false, status: r.status, erro: "validacao nao encontrada na colecao" };
   return { ok: true, ticketId: Number(d.tickets_id), aprovadorAtual: Number(d.users_id_validate),
     statusValidacao: Number(d.status), solicitante: Number(d.users_id) };
 }
@@ -92,19 +128,15 @@ export async function resolverUsuario(env: GlpiEnv, session: string, login: stri
 // 1. DEVOLVER: acompanhamento publico no chamado. O solicitante recebe a
 //    notificacao do proprio GLPI e responde no chamado, que e a trilha formal.
 export async function adicionarAcompanhamento(env: GlpiEnv, session: string, ticketId: number, html: string) {
-  const body = { input: { itemtype: "Ticket", items_id: ticketId, content: html, is_private: 0 } };
-  const r = await fetch(`${GLPI_BASE}/ITILFollowup/`, { method: "POST", headers: H(env, session), body: JSON.stringify(body) });
-  const txt = await r.text();
-  return { ok: r.status === 200 || r.status === 201, status: r.status, resposta: txt.slice(0, 300) };
+  return escrever(env, session, "POST", "/ITILFollowup/",
+    { input: { itemtype: "Ticket", items_id: ticketId, content: html, is_private: 0 } });
 }
 
 // 2. ENCERRAR: registra a solucao, o que no GLPI leva o chamado a Solucionado.
 //    Mesmo endpoint que o app de estornos ja usa em producao.
 export async function encerrarChamado(env: GlpiEnv, session: string, ticketId: number, html: string) {
-  const body = { input: { itemtype: "Ticket", items_id: ticketId, solutiontypes_id: 2, content: html } };
-  const r = await fetch(`${GLPI_BASE}/ITILSolution/`, { method: "POST", headers: H(env, session), body: JSON.stringify(body) });
-  const txt = await r.text();
-  return { ok: r.status === 200 || r.status === 201, status: r.status, resposta: txt.slice(0, 300) };
+  return escrever(env, session, "POST", "/ITILSolution/",
+    { input: { itemtype: "Ticket", items_id: ticketId, solutiontypes_id: 2, content: html } });
 }
 
 // 3. TROCAR APROVADOR: muda QUEM valida, nunca o veredito. O input e montado
@@ -112,10 +144,7 @@ export async function encerrarChamado(env: GlpiEnv, session: string, ticketId: n
 export async function trocarAprovador(env: GlpiEnv, session: string, validationId: number, novoUsuarioId: number) {
   const input: Record<string, unknown> = { id: validationId, users_id_validate: novoUsuarioId };
   assertNaoEhAprovacao(input);
-  const r = await fetch(`${GLPI_BASE}/TicketValidation/${validationId}`, {
-    method: "PUT", headers: H(env, session), body: JSON.stringify({ input }) });
-  const txt = await r.text();
-  return { ok: r.status === 200 || r.status === 201, status: r.status, resposta: txt.slice(0, 300) };
+  return escrever(env, session, "PUT", `/TicketValidation/${validationId}`, { input });
 }
 
 // ---------------------------------------------------------------- orquestracao

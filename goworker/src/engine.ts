@@ -139,9 +139,20 @@ export function empresaKey(p) {
   return 'kind:' + p.kind;
 }
 
-// chave de duplicidade: mesmo beneficiario + mesmo tipo + mesmo texto normalizado
+// chave de duplicidade por TEXTO. Fraca: fornecedor recorrente manda centenas de
+// pedidos com titulo identico. So serve para agrupar, nunca para acusar.
 export function dupKey(p) {
   return partyKey(p) + '|' + p.kind + '|' + normalizeSupplier(p.title).slice(0, 120);
+}
+
+// Chave de duplicidade REAL, agora que o valor e o vencimento existem:
+// mesmo beneficiario + mesmo centavo + mesmo vencimento. Dois pedidos assim sao
+// a mesma obrigacao ou um erro, nunca duas notas diferentes por coincidencia.
+export function obrigacaoKey(r) {
+  if (r.valor === null || r.valor === undefined || !r.vencimento) return null;
+  const quem = r.supplierNorm || r.cnpj || r.cpf;
+  if (!quem) return null;
+  return quem + '|' + Math.round(r.valor * 100) + '|' + r.vencimento;
 }
 
 // ---------------------------------------------------------------- enriquecimento
@@ -149,6 +160,9 @@ export function dupKey(p) {
 export function enrich(records) {
   return records.map(r => {
     const p = parseTitle(r.paymentRequestTitle);
+    // O plugin financeiro do GLPI traz o fornecedor num campo proprio, muito
+    // melhor que o extraido do titulo. Quando existe, ele manda.
+    const fornecedorReal = (r.fornecedor ?? "").trim() || null;
     const sub = parseDate(r.submissionDate);
     const val = parseDate(r.validationDate);
     return {
@@ -159,8 +173,19 @@ export function enrich(records) {
       title: p.title,
       kind: p.kind,
       money: p.money,
-      supplier: p.supplier,
-      supplierNorm: p.supplierNorm,
+      supplier: fornecedorReal ?? p.supplier,
+      supplierNorm: fornecedorReal ? normalizeSupplier(fornecedorReal) : p.supplierNorm,
+      supplierDoTitulo: p.supplier,
+      // campos financeiros reais (PluginFieldsTicketfinanceiroapar)
+      ticketId: r.ticketId ?? null,
+      usersIdValidate: r.usersIdValidate ?? null,
+      valor: typeof r.valor === "number" ? r.valor : null,
+      juros: typeof r.juros === "number" ? r.juros : null,
+      vencimento: r.vencimento ?? null,
+      vencimentoTs: r.vencimento ? parseDate(r.vencimento + " 00:00:00") : null,
+      centroCusto: r.centroCusto ?? null,
+      formaPagamento: r.formaPagamento ?? null,
+      tipoDocumento: r.tipoDocumento ?? null,
       cnpj: p.cnpj,
       cnpjRoot: p.cnpjRoot,
       cpf: p.cpf,
@@ -173,7 +198,7 @@ export function enrich(records) {
       commentSubmission: r.commentSubmission || null,
       commentValidation: r.commentValidation || null,
     };
-  });
+  }).map(r => ({ ...r, obrigacaoKey: obrigacaoKey(r) }));
 }
 
 // ---------------------------------------------------------------- baselines
@@ -373,6 +398,14 @@ export function analyze(all, opts = {}) {
   const parties = buildPartyIndex(all);
   const kindRisk = opts.kindRisk || buildKindRisk(all);
 
+  // indice de obrigacao: beneficiario + valor + vencimento
+  const byObrigacao = new Map();
+  for (const r of all) {
+    if (!r.obrigacaoKey) continue;
+    if (!byObrigacao.has(r.obrigacaoKey)) byObrigacao.set(r.obrigacaoKey, []);
+    byObrigacao.get(r.obrigacaoKey).push(r);
+  }
+
   const bySecond = new Map();
   for (const r of all) {
     if (!r.money || !r.submittedAt) continue;
@@ -486,6 +519,29 @@ export function analyze(all, opts = {}) {
       msg: 'Pedido financeiro cujo registro de aprovacao nao identifica o beneficiario. Nao ha o que auditar.',
       evidence: [] });
 
+    // R15 DUPLICIDADE REAL. Com valor e vencimento no registro, "mesmo beneficiario,
+    // mesmo centavo, mesmo vencimento" deixa de ser hipotese. Se um irmao ja foi
+    // APROVADO, este pendente e candidato a pagamento em duplicidade.
+    if (r.obrigacaoKey) {
+      const irmaos = (byObrigacao.get(r.obrigacaoKey) || []).filter(o => o.id !== r.id);
+      const aprovados = irmaos.filter(o => o.status === 'Aprovado');
+      const parados = irmaos.filter(o => o.status === 'Aguardando');
+      if (aprovados.length) findings.push({ code: 'DUPLICIDADE_JA_APROVADA', severity: 3,
+        msg: `Mesmo beneficiario, mesmo valor (R$ ${r.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) e mesmo vencimento (${r.vencimento}) de um pedido JA APROVADO (id ${aprovados[aprovados.length-1].id}). Risco de pagar duas vezes.`,
+        evidence: aprovados.slice(0, 5).map(o => ({ id: o.id, ticketId: o.ticketId, status: o.status })) });
+      else if (parados.length) findings.push({ code: 'DUPLICIDADE_NA_FILA', severity: 2,
+        msg: `${parados.length + 1} pedidos com o mesmo beneficiario, valor e vencimento estao parados ao mesmo tempo.`,
+        evidence: parados.slice(0, 5).map(o => ({ id: o.id, ticketId: o.ticketId })) });
+    }
+
+    // R16 documento vencido (Art. 8 da Politica de Pagamentos)
+    if (r.vencimentoTs && r.vencimentoTs < now) {
+      const diasVencido = Math.round((now - r.vencimentoTs) / DAY);
+      findings.push({ code: 'DOCUMENTO_VENCIDO', severity: diasVencido > 30 ? 3 : 2,
+        msg: `Vencimento em ${r.vencimento}, ha ${diasVencido} dias. "Documentos vencidos nao serao aceitos para pagamento, salvo com justificativa formal e autorizacao previa do Diretor Financeiro" (Art. 8).`,
+        evidence: [{ vencimento: r.vencimento, diasVencido, valor: r.valor }] });
+    }
+
     // R8 lote no mesmo segundo: INFORMATIVO. 96% dos casos historicos eram lote legitimo.
     if (r.money && r.submittedAt) {
       const twins = (bySecond.get(r.dupKey + '@' + r.submittedAt) || []).filter(o => o.id !== r.id);
@@ -517,9 +573,18 @@ export function analyze(all, opts = {}) {
     // Prioridade separa "o que fazer" de "em que ordem". Idade sozinha era o unico
     // criterio antes, e idade nao tem nada a ver com materialidade.
     const liftTipo = kr && kr.significativo ? kr.liftEncolhido : 1;
-    // 0-100. Gravidade do achado, ponderada pelo risco historico da classe, mais um
-    // componente menor de idade. Idade sozinha nunca ordena a fila.
-    const prioridade = Math.round(Math.min(100, (d.risk * liftTipo) / 3 + Math.min(25, (ageDays ?? 0) / 14)));
+    // Prioridade 0-100, somando termos LIMITADOS. A versao anterior multiplicava
+    // risco por lift e saturava em 100 antes de o dinheiro entrar na conta, o que
+    // punha pedido de R$ 0,00 no topo. Agora cada termo tem teto proprio:
+    //   gravidade do achado ......... ate 40
+    //   dinheiro em jogo (log10) .... ate 45   (R$ 1 mi ~ 38, R$ 10 mil ~ 25)
+    //   classe historicamente pior .. ate  8
+    //   idade ....................... ate  7
+    const tRisco = (d.risk / 100) * 40;
+    const tDinheiro = r.valor && r.valor > 0 ? Math.min(45, Math.log10(r.valor + 1) * 6.4) : 0;
+    const tClasse = Math.min(8, Math.max(0, (liftTipo - 1) * 3));
+    const tIdade = Math.min(7, (ageDays ?? 0) / 25);
+    const prioridade = Math.round(Math.min(100, tRisco + tDinheiro + tClasse + tIdade));
     results.push({ ...r, ageDays, isTest, findings, ...d, liftTipo, prioridade });
   }
 
@@ -528,11 +593,11 @@ export function analyze(all, opts = {}) {
 
 // ---------------------------------------------------------------- recomendacao
 
-const BLOQUEIO   = new Set(['CNPJ_INVALIDO', 'CPF_INVALIDO', 'BENEFICIARIO_SO_RECUSADO', 'NOME_DIVERGE_DO_CNPJ', 'AUTOAPROVACAO']);
+const BLOQUEIO   = new Set(['CNPJ_INVALIDO', 'CPF_INVALIDO', 'BENEFICIARIO_SO_RECUSADO', 'NOME_DIVERGE_DO_CNPJ', 'AUTOAPROVACAO', 'DUPLICIDADE_JA_APROVADA']);
 const ARQUIVO    = new Set(['REGISTRO_DE_TESTE']);
 const REDIRECIONA= new Set(['APROVADOR_INATIVO']);
 // Severidade 2 que fala de CADASTRO (nao de idade): resolve-se corrigindo dado.
-const CADASTRO   = new Set(['BENEFICIARIO_NOVO', 'BENEFICIARIO_ALTA_RECUSA', 'SEM_BENEFICIARIO', 'VALOR_NO_TITULO']);
+const CADASTRO   = new Set(['BENEFICIARIO_NOVO', 'BENEFICIARIO_ALTA_RECUSA', 'SEM_BENEFICIARIO', 'VALOR_NO_TITULO', 'DOCUMENTO_VENCIDO', 'DUPLICIDADE_NA_FILA']);
 
 export const ACOES = {
   BLOQUEAR:     { label: 'Bloquear e corrigir cadastro', ordem: 1 },
@@ -595,6 +660,10 @@ export function summarize(analysis) {
     orfas, gargalos,
     oldestDays: ages.length ? Math.round(ages[ages.length-1]) : null,
     medianAgeDays: ages.length ? Math.round(ages[Math.floor(ages.length/2)]) : null,
+    valorParado: p.reduce((s, r) => s + (r.valor ?? 0), 0),
+    valorComDuplicidade: p.filter(r => r.findings.some(f => f.code === 'DUPLICIDADE_JA_APROVADA'))
+      .reduce((s, r) => s + (r.valor ?? 0), 0),
+    pedidosComValor: p.filter(r => r.valor !== null).length,
     tiposDeAltoRisco: [...analysis.kindRisk.porKind.values()].filter(k => k.significativo)
       .sort((a, b) => b.lift - a.lift)
       .map(k => ({ kind: k.kind, n: k.n, recusados: k.recusados, lift: Number(k.lift.toFixed(1)),
