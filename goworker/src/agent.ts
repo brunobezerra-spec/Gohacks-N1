@@ -484,9 +484,26 @@ export function acoesDoItem(x: any) {
       baseLegal: "CAP Art. 4 e 7" });
   }
   if (x.roteamento.precisaRerotear) {
+    // O agente sabe o NIVEL exigido pela tabela do Art. 7, mas nao consegue
+    // resolver QUEM ocupa esse nivel na area demandante: o perfil dele nao le
+    // usuarios no GLPI, e nao existe mapa area -> gestor. Entao ele escreve no
+    // chamado dizendo qual e a alcada correta e por que, e a troca fica humana.
+    // Escolher aprovador e julgamento sobre estrutura, nao sobre dado.
+    const corpo = [
+      `Este pedido esta com a alcada errada.`,
+      ``,
+      x.roteamento.motivo ?? "O aprovador atual nao tem competencia para este valor.",
+      ``,
+      `Base: Politica Corporativa de Pagamentos, ${x.roteamento.baseLegal}`,
+      ``,
+      `Aprovador atual: ${x.roteamento.aprovadorAtual ?? "nao identificado"} (${x.roteamento.nivelAtual})`,
+      `Nivel exigido:   ${x.roteamento.nivelExigido ?? "GERENTE"}`,
+      ``,
+      `Nao troquei o aprovador automaticamente porque nao consigo saber quem ocupa esse nivel na area demandante. Reatribua a validacao para a alcada correta.`,
+    ].join("\n");
     out.push({ tipo: "ROTEAR_PARA_ALCADA", pedidoId: x.id, destinatario: "GoService",
-      assunto: `Rerotear #${x.id} para alcada ${x.roteamento.nivelExigido ?? "GERENTE"}`,
-      payload: x.roteamento, baseLegal: "Art. 7" });
+      assunto: `Alcada incorreta no pedido #${x.id}: exige ${x.roteamento.nivelExigido ?? "GERENTE"}`,
+      payload: { ...x.roteamento, corpo }, baseLegal: "CAP Art. 7" });
   }
   if (x.notificacaoPenalidade) {
     out.push({ tipo: "NOTIFICAR_PENALIDADE", pedidoId: x.id,

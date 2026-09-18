@@ -650,7 +650,11 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
   for (let i = 0; i < out.resultados.length; i++) {
     const res = out.resultados[i], linha = linhas[i];
     if (!linha) continue;
-    const novoStatus = res.status === "executada" ? "entregue" : res.status;
+    // Idempotencia: "o item ja esta solucionado" significa que o objetivo JA foi
+    // alcancado, entao e sucesso, nao falha. Tratar como falha fazia o lote
+    // reprocessar sempre os mesmos ids baixos e travar a fila inteira atras deles.
+    const jaFeito = /j[aá] est[aá] solucionado|already.*solved/i.test(String(res.resposta ?? ""));
+    const novoStatus = (res.status === "executada" || jaFeito) ? "entregue" : res.status;
     await env.DB.exec("UPDATE outbox SET status = ?, despachado_em = ?, resultado = ? WHERE id = ?",
       [novoStatus, new Date().toISOString(), JSON.stringify(res), linha.id]);
   }

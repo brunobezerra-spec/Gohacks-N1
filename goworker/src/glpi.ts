@@ -257,8 +257,17 @@ export async function executar(env: GlpiEnv, ordens: Ordem[], opts: { piloto?: s
       if (o.tipo === "ROTEAR_PARA_ALCADA") {
         let destino = o.novoUsuarioId ?? null;
         if (!destino && o.novoLogin) destino = await resolverUsuario(env, session, o.novoLogin);
-        if (!destino) { resultados.push({ ...o, status: "sem_destino",
-          motivo: "nao consegui resolver o id do aprovador de destino no GLPI" }); continue; }
+        // Sem destino resolvivel, o agente NAO fica calado: escreve no chamado
+        // qual e a alcada correta e por que, e deixa a reatribuicao para gente.
+        if (!destino) {
+          const envioF = m === "executar" ? await adicionarAcompanhamento(env, session, alvo.ticketId!, html) : null;
+          resultados.push({ ...o, ticketId: alvo.ticketId,
+            chamada: { metodo: "POST", url: "/ITILFollowup/", nota: "fallback: sem id do aprovador de destino" },
+            status: m === "ensaio" ? "ensaio" : (envioF?.ok ? "executada" : "falhou"),
+            resposta: envioF?.resposta ?? null, httpStatus: envioF?.status ?? null,
+            motivo: "alcada sinalizada no chamado; troca de aprovador continua humana" });
+          continue;
+        }
         o = { ...o, novoUsuarioId: destino };
         const input = { id: o.validationId, users_id_validate: o.novoUsuarioId };
         try { assertNaoEhAprovacao(input); }
