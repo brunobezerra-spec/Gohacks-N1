@@ -16,6 +16,7 @@ import { avaliarPolitica, construirGrafiasCorretas, alcadaExigida, temAlcada,
          ESTORNO_RECOMENDADO_DIAS, ANEXO_I, type Nivel } from "./policy";
 import { DAY } from "./engine";
 import { severidadeDe, janelaDe, REGRAS } from "./regras";
+import { REPORTA_A } from "./hierarquia";
 
 // ---------------------------------------------------------------- acoes
 
@@ -489,18 +490,30 @@ export function acoesDoItem(x: any) {
     // usuarios no GLPI, e nao existe mapa area -> gestor. Entao ele escreve no
     // chamado dizendo qual e a alcada correta e por que, e a troca fica humana.
     // Escolher aprovador e julgamento sobre estrutura, nao sobre dado.
+    // A mensagem e dirigida ao APROVADOR ATUAL, nao ao solicitante. Motivo: nos
+    // 185 casos observados o aprovador vem de regra fixa do formulario, nao de
+    // escolha de quem pediu (joaquim tem 65 pedidos de UM solicitante so).
+    // Pedir ao solicitante para "corrigir a alcada" seria pedir que ele conserte
+    // algo que nao escolheu. Ja o aprovador atual e gestor e sabe quem esta acima
+    // dele. O agente sugere o caminho e nao troca nada sozinho.
+    const chefe = x.roteamento.aprovadorAtual ? REPORTA_A[x.roteamento.aprovadorAtual] : null;
     const corpo = [
-      `Este pedido esta com a alcada errada.`,
+      `Este pedido esta com a alcada errada e nao pode ser aprovado como esta.`,
       ``,
       x.roteamento.motivo ?? "O aprovador atual nao tem competencia para este valor.",
       ``,
-      `Base: Politica Corporativa de Pagamentos, ${x.roteamento.baseLegal}`,
-      ``,
       `Aprovador atual: ${x.roteamento.aprovadorAtual ?? "nao identificado"} (${x.roteamento.nivelAtual})`,
       `Nivel exigido:   ${x.roteamento.nivelExigido ?? "GERENTE"}`,
+      `Base: Politica Corporativa de Pagamentos, ${x.roteamento.baseLegal}`,
       ``,
-      `Nao troquei o aprovador automaticamente porque nao consigo saber quem ocupa esse nivel na area demandante. Reatribua a validacao para a alcada correta.`,
-    ].join("\n");
+      chefe ? `Pelo Teamguide, ${x.roteamento.aprovadorAtual} reporta a ${chefe.reportaA}. Se essa pessoa tiver a alcada exigida, e o caminho natural.` : ``,
+      ``,
+      `Duas saidas, e o agente nao escolhe nenhuma:`,
+      `1. Reatribuir a validacao para quem tem a alcada da tabela do Art. 7.`,
+      `2. Se houver delegacao formal, registra-la no GoService. O Art. 7 admite delegacao para subordinado direto, sem quebrar segregacao de funcoes, e o titular responde solidariamente. Delegacao informal e compartilhamento de senha sao expressamente proibidos.`,
+      ``,
+      `Nao reatribui sozinho de proposito: escolher aprovador e julgamento sobre a estrutura da area, nao sobre o dado do pedido.`,
+    ].filter(Boolean).join("\n");
     out.push({ tipo: "ROTEAR_PARA_ALCADA", pedidoId: x.id, destinatario: "GoService",
       assunto: `Alcada incorreta no pedido #${x.id}: exige ${x.roteamento.nivelExigido ?? "GERENTE"}`,
       payload: { ...x.roteamento, corpo }, baseLegal: "CAP Art. 7" });

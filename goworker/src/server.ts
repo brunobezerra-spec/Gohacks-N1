@@ -342,7 +342,46 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
             ].join("\n") } })]);
     }
   }
-  mark("outbox gravada", { acoes: acoes.length, higiene: testes.length });
+  // UMA demanda estrutural por execucao: os casos de alcada errada nao sao erro
+  // de quem submeteu. O formulario do GoService roteia por CATEGORIA e a
+  // Politica manda rotear por VALOR. Enquanto isso nao mudar, o agente vai
+  // reencontrar os mesmos casos todo dia.
+  const semAlcada = ag.itens.filter((x: any) => x.roteamento?.precisaRerotear);
+  if (semAlcada.length) {
+    const jaTem = await env.DB.query(
+      "SELECT COUNT(*) n FROM outbox WHERE tipo = 'ABRIR_DEMANDA_DE_PRODUTO' AND pedido_id IS NULL AND status = 'entregue'", []);
+    if (!(jaTem.rows?.[0]?.n)) {
+      const porAp: Record<string, { n: number; sol: Set<string>; min: number; max: number }> = {};
+      for (const x of semAlcada) {
+        const r = a.pending.find((z: any) => z.id === x.id); if (!r) continue;
+        const k = r.approver ?? "(sem aprovador)";
+        porAp[k] = porAp[k] ?? { n: 0, sol: new Set(), min: Infinity, max: 0 };
+        porAp[k].n++; if (r.requester) porAp[k].sol.add(r.requester);
+        porAp[k].min = Math.min(porAp[k].min, r.valor ?? 0); porAp[k].max = Math.max(porAp[k].max, r.valor ?? 0);
+      }
+      const brl = (v: number) => "R$ " + (v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
+      const total = semAlcada.reduce((s: number, x: any) =>
+        s + ((a.pending.find((z: any) => z.id === x.id)?.valor) ?? 0), 0);
+      await env.DB.exec("INSERT INTO outbox (tipo,pedido_id,status,doc) VALUES (?,?,?,?)",
+        ["ABRIR_DEMANDA_DE_PRODUTO", null, "pronta", JSON.stringify({
+          run_id: rid, destinatario: "produto / TI / Diretoria Financeira", criado_em: agora,
+          assunto: `Rotear aprovacao por VALOR: ${semAlcada.length} pedidos hoje com alcada incorreta`,
+          base_legal: "CAP Art. 7",
+          payload: { titulo: `Rotear aprovacao de pagamento por VALOR (Art. 7): ${semAlcada.length} pedidos fora da alcada`,
+            corpo: [
+            `${semAlcada.length} pedidos de pagamento, somando ${brl(total)}, estao com aprovador que nao tem a alcada exigida pelo Art. 7.`,
+            ``,
+            `Isto NAO e erro de quem submeteu. O formulario do GoService atribui o aprovador por CATEGORIA do pedido; a Politica exige atribuicao por VALOR do documento. Enquanto as duas coisas nao coincidirem, o desvio se repete todo dia.`,
+            ``,
+            `Evidencia de que o roteamento e automatico, nao escolhido:`,
+            ...Object.entries(porAp).sort((x, y) => y[1].n - x[1].n).slice(0, 8).map(([k, v]) =>
+              `- ${k}: ${v.n} pedidos vindos de ${v.sol.size || "?"} solicitante(s), de ${brl(v.min)} a ${brl(v.max)}`),
+            ``,
+            `Pedido: incluir no fluxo de aprovacao a tabela do Art. 7 -- ate R$ 20.000 Gerente da area, acima de R$ 20.000 ate R$ 50.000 Diretor da area, acima de R$ 50.000 Socio; e para penalidade, ate R$ 2.000 Diretoria Financeira e acima disso Socios.`,
+          ].join("\n") } })]);
+    }
+  }
+  mark("outbox gravada", { acoes: acoes.length, higiene: testes.length, alcada: semAlcada.length });
 
   s.lixeira = { novos: novosNaLixeira.length, total: naLixeira.size, restaurados: restaurados.size,
     retencao: "não expira; restaurável a qualquer momento" };
@@ -600,7 +639,10 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
   //  CORRIGIR_CADASTRO   -> e ato do Supply/Compras no ERP
   //  MOVER_PARA_LIXEIRA  -> e do proprio livro-razao do agente
   //  ABRIR_DEMANDA_DE_PRODUTO -> vai para produto, nao para o chamado
-  w.push("tipo NOT IN ('CORRIGIR_CADASTRO','MOVER_PARA_LIXEIRA','ABRIR_DEMANDA_DE_PRODUTO')");
+  // A demanda ESTRUTURAL (pedido_id nulo) vira chamado. A demanda por pedido
+  // individual continua interna, senao viraria um chamado por pedido.
+  w.push("tipo NOT IN ('CORRIGIR_CADASTRO','MOVER_PARA_LIXEIRA')");
+  w.push("NOT (tipo = 'ABRIR_DEMANDA_DE_PRODUTO' AND pedido_id IS NOT NULL)");
 
   // O escopo do piloto entra NA CONSULTA. Filtrar depois de ler as 20 primeiras
   // fazia o agente gastar o lote inteiro com pedidos de outro aprovador.

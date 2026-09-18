@@ -200,7 +200,7 @@ export async function abrirChamadoDeHigiene(env: GlpiEnv, session: string, titul
 
 export type Ordem = {
   tipo: "DEVOLVER_AO_SOLICITANTE" | "RECOMENDAR_ESTORNO" | "NOTIFICAR_PENALIDADE"
-      | "ENCERRAR_PEDIDO" | "ROTEAR_PARA_ALCADA" | "ABRIR_CHAMADO_DE_HIGIENE";
+      | "ENCERRAR_PEDIDO" | "ROTEAR_PARA_ALCADA" | "ABRIR_CHAMADO_DE_HIGIENE" | "ABRIR_DEMANDA_DE_PRODUTO";
   validationId: number;
   html?: string;
   novoUsuarioId?: number;
@@ -229,8 +229,10 @@ export async function executar(env: GlpiEnv, ordens: Ordem[], opts: { piloto?: s
     for (const ordem of ordens) {
       let o: any = ordem;
 
-      // O chamado de higiene nao pende de nenhuma validacao: e um chamado novo.
-      if (o.tipo === "ABRIR_CHAMADO_DE_HIGIENE") {
+      // Chamado de higiene e demanda de produto nao pendem de validacao nenhuma:
+      // sao chamados novos. A demanda de produto so vale se virar item numa fila
+      // que alguem olha; parada na outbox do agente nao muda nada.
+      if (o.tipo === "ABRIR_CHAMADO_DE_HIGIENE" || o.tipo === "ABRIR_DEMANDA_DE_PRODUTO") {
         const envio = m === "executar"
           ? await abrirChamadoDeHigiene(env, session, o.titulo ?? "Higiene de base do Goworker", (o.html ?? "") + ASSINATURA)
           : null;
