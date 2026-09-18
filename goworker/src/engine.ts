@@ -347,6 +347,7 @@ export function analyze(all, opts = {}) {
   const prof = buildKeyProfiles(all);
   const activity = buildApproverActivity(all, now);
   const parties = buildPartyIndex(all);
+  const kindRisk = opts.kindRisk || buildKindRisk(all);
 
   const bySecond = new Map();
   for (const r of all) {
@@ -462,6 +463,16 @@ export function analyze(all, opts = {}) {
         evidence: twins.slice(0,8).map(o => ({ id: o.id, status: o.status })) });
     }
 
+    // R14 tipo de pedido historicamente mais recusado. NAO muda a acao (nao e
+    // pendencia de cadastro), muda a ORDEM: sem valor em reais, a classe do pedido
+    // e o unico proxy de materialidade que sobrevive a correcao de Bonferroni.
+    const kr = kindRisk.porKind.get(r.kind);
+    if (kr && kr.significativo) {
+      findings.push({ code: 'TIPO_DE_ALTO_RISCO', severity: 1,
+        msg: `Pedidos do tipo "${r.kind}" sao recusados ${kr.lift.toFixed(1)}x mais que a media (${kr.recusados} de ${kr.n}, p ajustado ${kr.pAjustado.toExponential(1)}).`,
+        evidence: [{ kind: r.kind, lift: Number(kr.lift.toFixed(2)), n: kr.n, recusados: kr.recusados }] });
+    }
+
     // R9 volume do dia acima do p95 do proprio fornecedor
     const p = prof.get(r.dupKey);
     if (r.money && r.submittedAt && p) {
@@ -471,10 +482,17 @@ export function analyze(all, opts = {}) {
         evidence: [{ sameDay, p95: p.perDayP95, total: p.total, distinctDays: p.distinctDays }] });
     }
 
-    results.push({ ...r, ageDays, isTest, findings, ...decide(findings) });
+    const d = decide(findings);
+    // Prioridade separa "o que fazer" de "em que ordem". Idade sozinha era o unico
+    // criterio antes, e idade nao tem nada a ver com materialidade.
+    const liftTipo = kr && kr.significativo ? kr.liftEncolhido : 1;
+    // 0-100. Gravidade do achado, ponderada pelo risco historico da classe, mais um
+    // componente menor de idade. Idade sozinha nunca ordena a fila.
+    const prioridade = Math.round(Math.min(100, (d.risk * liftTipo) / 3 + Math.min(25, (ageDays ?? 0) / 14)));
+    results.push({ ...r, ageDays, isTest, findings, ...d, liftTipo, prioridade });
   }
 
-  return { pending: results, baselines: base, profiles: prof, activity, now };
+  return { pending: results, baselines: base, profiles: prof, activity, kindRisk, now };
 }
 
 // ---------------------------------------------------------------- recomendacao
@@ -546,6 +564,11 @@ export function summarize(analysis) {
     orfas, gargalos,
     oldestDays: ages.length ? Math.round(ages[ages.length-1]) : null,
     medianAgeDays: ages.length ? Math.round(ages[Math.floor(ages.length/2)]) : null,
+    tiposDeAltoRisco: [...analysis.kindRisk.porKind.values()].filter(k => k.significativo)
+      .sort((a, b) => b.lift - a.lift)
+      .map(k => ({ kind: k.kind, n: k.n, recusados: k.recusados, lift: Number(k.lift.toFixed(1)),
+        liftEncolhido: Number(k.liftEncolhido.toFixed(1)), pAjustado: k.pAjustado })),
+    taxaBaseRecusa: analysis.kindRisk.base,
     globalMedianDecisionH: analysis.baselines.globalMedianH,
     globalP90DecisionH: analysis.baselines.globalP90H,
     decidedSample: analysis.baselines.decidedCount,
@@ -611,5 +634,84 @@ export function auditRetroativo(all) {
     porDocumento: [...porDoc.values()].sort((a, b) => b.n - a.n).slice(0, 25),
     conflitosDeGrafia: conflitos.slice(0, 15),
     totalConflitos: conflitos.length,
+  };
+}
+
+// ---------------------------------------------------------------- risco por tipo
+
+// Sem valor em reais nao da para priorizar por dinheiro. Mas o TIPO do pedido e um
+// proxy de materialidade que estava de graca no dado e o motor nao usava: algumas
+// classes sao recusadas muito acima da media, e isso sobrevive a correcao de
+// multiplas comparacoes (Bonferroni), diferente dos sinais de fila.
+const lchoose = (n, k) => { let s = 0; for (let i = 0; i < k; i++) s += Math.log(n - i) - Math.log(i + 1); return s; };
+export function binomUpper(n, k, p) {
+  let s = 0;
+  for (let i = k; i <= n; i++) s += Math.exp(lchoose(n, i) + i * Math.log(p) + (n - i) * Math.log(1 - p));
+  return Math.min(1, s);
+}
+
+// Encolhimento: um lift de 26x vindo de 18 observacoes nao e 26x. Puxamos a taxa
+// de cada tipo na direcao da taxa-base com um prior de PRIOR_N pseudo-observacoes,
+// de modo que classe pequena so se afasta da media com evidencia de verdade.
+export const PRIOR_N = 50;
+
+export function buildKindRisk(all, minN = 15) {
+  const dec = all.filter(r => r.status === 'Aprovado' || r.status === 'Recusado');
+  const base = dec.length ? dec.filter(r => r.status === 'Recusado').length / dec.length : 0;
+  const g = new Map();
+  for (const r of dec) {
+    if (!g.has(r.kind)) g.set(r.kind, { n: 0, recusados: 0 });
+    const e = g.get(r.kind);
+    e.n++;
+    if (r.status === 'Recusado') e.recusados++;
+  }
+  const elegiveis = [...g.values()].filter(e => e.n >= minN).length || 1;
+  const out = new Map();
+  for (const [kind, e] of g) {
+    const lift = base ? (e.recusados / e.n) / base : 1;
+    const taxaEncolhida = (e.recusados + base * PRIOR_N) / (e.n + PRIOR_N);
+    const liftEncolhido = base ? taxaEncolhida / base : 1;
+    const p = e.n >= minN ? binomUpper(e.n, e.recusados, base) : 1;
+    out.set(kind, { kind, ...e, lift, liftEncolhido, p, pAjustado: Math.min(1, p * elegiveis),
+      significativo: e.n >= minN && p * elegiveis < 0.05 && lift > 1 });
+  }
+  return { base, comparacoes: elegiveis, porKind: out };
+}
+
+// ---------------------------------------------------------------- motivos de recusa
+
+const HTML = (s) => String(s || '')
+  .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
+  .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+
+// O GLPI guarda o motivo da recusa em texto livre. As 152 recusas tem 100% de
+// cobertura. Isso nao ajuda a triar a fila de hoje (so 11 pendentes tem comentario),
+// mas diz o que de fato da errado, e mostra que quase todo motivo real depende
+// justamente dos campos financeiros que o perfil de leitura nao entrega.
+export const MOTIVOS = [
+  { cat: 'centro de custo errado',   re: /centro de custo/i,                              precisaValor: true },
+  { cat: 'nota fiscal ou documento', re: /\bnf\b|nota fiscal|boleto|comprovante/i,         precisaValor: true },
+  { cat: 'valor errado',             re: /valor|r\$|pre[cç]o|desconto|juros/i,             precisaValor: true },
+  { cat: 'duplicidade',              re: /duplic|repetid|j[aá] (foi|abriu)|mesma solicita/i, precisaValor: true },
+  { cat: 'cadastro do fornecedor',   re: /cadastr|fornecedor|cnpj|dados banc|conta banc/i, precisaValor: false },
+  { cat: 'aprovador errado',         re: /aprovador|n[aã]o (sou eu|e de minha)|encaminh|solicitante de aprova/i, precisaValor: false },
+  { cat: 'e registro de teste',      re: /\bteste\b/i,                                     precisaValor: false },
+  { cat: 'refazer o pedido',         re: /refaz|corrig|ajust|nova solicita|colocado errado/i, precisaValor: false },
+];
+
+export function motivosDeRecusa(all) {
+  const rec = all.filter(r => r.status === 'Recusado');
+  const textos = rec.map(r => ({ id: r.id, txt: HTML(r.commentValidation) })).filter(x => x.txt);
+  const cat = MOTIVOS.map(m => ({ categoria: m.cat, precisaValor: m.precisaValor,
+    n: textos.filter(x => m.re.test(x.txt)).length }));
+  const classificados = new Set();
+  for (const m of MOTIVOS) for (const x of textos) if (m.re.test(x.txt)) classificados.add(x.id);
+  const dependemDeValor = cat.filter(c => c.precisaValor).reduce((s, c) => s + c.n, 0);
+  return {
+    recusas: rec.length,
+    comMotivoRegistrado: textos.length,
+    categorias: cat.sort((a, b) => b.n - a.n),
+    semCategoria: textos.length - classificados.size,
+    dependemDeCampoFinanceiro: dependemDeValor,
   };
 }

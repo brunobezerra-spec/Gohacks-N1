@@ -54,6 +54,13 @@ ok('mostra 88 aprovados em grafia invalida', retro.includes('88'), '');
 ok('rodape lista os sinais', t('#foot').includes('FILA_ZUMBI'));
 ok('rodape declara que nao escreve', t('#foot').includes('não tem credencial de escrita'));
 
+ok('painel de tipos de alto risco', t('#tipos').includes('estorno') && t('#tipos').includes('compra'), t('#tipos').slice(0,90));
+ok('mostra lift encolhido', t('#tipos').includes('×'), '');
+ok('nota explica Bonferroni', t('#notaPrio').includes('Bonferroni'));
+ok('painel de motivos de recusa', t('#motivos').includes('centro de custo'), t('#motivos').slice(0,90));
+ok('motivos marcam o que depende de valor', t('#motivos').includes('precisa de valor'), '');
+ok('coluna Prio no cabecalho da fila', d.querySelector('thead')?.textContent.includes('Prio'));
+
 console.log('\n== dossie (modal) ==');
 const id = rows[0].getAttribute('onclick').match(/\d+/)[0];
 dom.window.abrir(Number(id));

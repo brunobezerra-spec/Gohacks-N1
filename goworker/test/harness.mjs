@@ -94,9 +94,9 @@ const rpc = async (method, params) => j(await call('/_mcp', { method:'POST',
 let m = await rpc('initialize', { protocolVersion:'2025-06-18' });
 ok('initialize', m.result?.protocolVersion === '2025-06-18', JSON.stringify(m).slice(0,200));
 m = await rpc('tools/list', {});
-ok('7 ferramentas', m.result?.tools?.length === 7, m.result?.tools?.length);
+ok('9 ferramentas', m.result?.tools?.length === 9, m.result?.tools?.length);
 ok('nomes corretos', m.result.tools.map(t=>t.name).sort().join(',') ===
-  'goworker_auditoria_retroativa,goworker_dossie,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_registrar_decisao,goworker_resumo',
+  'goworker_auditoria_retroativa,goworker_dossie,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_motivos_de_recusa,goworker_registrar_decisao,goworker_resumo,goworker_tipos_de_alto_risco',
   m.result?.tools?.map(t=>t.name).join(','));
 m = await rpc('tools/call', { name:'goworker_auditoria_retroativa', arguments:{} });
 { const A = m.result?.structuredContent;
@@ -121,16 +121,34 @@ m = await rpc('tools/call', { name:'inexistente', arguments:{} });
 ok('ferramenta inexistente = erro JSON-RPC', m.error?.code === -32602);
 
 console.log('\n== 8. SEGURANCA: nenhum caminho de escrita no GoService ==');
-const src = (await import('node:fs')).readFileSync('/tmp/bundle.js','utf8');
-ok('nao referencia review_approval', !src.includes('review_approval'));
-// remove comentarios antes de procurar por chamada real de API
-const code = src.replace(/\/\*[\s\S]*?\*\//g,'').split('\n').filter(l=>!l.trim().startsWith('//')).join('\n');
-ok('nenhuma chamada a endpoint GLPI/GoService no codigo executavel',
-   !/TicketValidation|\/apirest|review_approval|goservice\\.[a-z]/i.test(code),
-   (code.match(/TicketValidation|apirest|review_approval/ig)||[]).join(','));
-ok('nenhum metodo HTTP de escrita para fora',
-   !/fetch\s*\([^)]*method\s*:\s*["'`](POST|PUT|PATCH|DELETE)/i.test(code));
-ok('nao faz fetch externo', !/fetch\s*\(\s*["'`]https?:/.test(src));
+{
+  const src = (await import('node:fs')).readFileSync('/tmp/bundle.js','utf8');
+  // O snapshot e DADO (inclui texto escrito por usuarios no GLPI, que pode conter
+  // qualquer palavra). A verificacao tem que olhar CODIGO, entao ele sai primeiro,
+  // junto com comentarios.
+  // esbuild reformata o literal, entao recortamos por indice: do inicio do
+  // SNAPSHOT ate a funcao que o expande.
+  const ini = src.indexOf('SNAPSHOT =');
+  const fim = src.indexOf('expandSnapshot', ini);
+  const semDados = ini >= 0 && fim > ini ? src.slice(0, ini) + src.slice(fim) : src;
+  const code = semDados.replace(/\/\*[\s\S]*?\*\//g,'')
+    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+
+  ok('snapshot foi isolado antes da checagem', semDados.length < src.length * 0.5,
+     `${semDados.length} vs ${src.length}`);
+  ok('nao referencia review_approval', !/review_approval/.test(code));
+  ok('nenhum endpoint GLPI/GoService no codigo', !/apirest|TicketValidation|\/Ticket\//i.test(code),
+     (code.match(/apirest|TicketValidation/ig)||[]).slice(0,3).join(','));
+  // A prova mais forte: o worker nao faz NENHUMA chamada de rede para fora.
+  // `async fetch(request, env)` e a DECLARACAO do handler do Worker, nao uma chamada.
+  const chamadas = (code.match(/\bfetch\s*\(/g) || []).length
+                 - (code.match(/async\s+fetch\s*\(/g) || []).length;
+  ok('o app nao CHAMA fetch() em lugar nenhum', chamadas === 0,
+     `${chamadas} chamada(s): ` + (code.match(/.{0,45}[^c]\bfetch\s*\(.{0,25}/g)||[]).slice(0,2).join(' | '));
+  ok('nao usa XMLHttpRequest nem WebSocket', !/XMLHttpRequest|new WebSocket/.test(code));
+  ok('nenhuma URL http(s) externa no codigo', !/["'`]https?:\/\//.test(code),
+     (code.match(/["'`]https?:\/\/[^"'`]{0,40}/g)||[]).slice(0,3).join(' | '));
+}
 
 console.log('\n== 9. re-run e idempotencia ==');
 r = await call('/api/run', { method:'POST' }); b = await j(r);
@@ -141,6 +159,28 @@ ok('auditoria acumula', b.length >= 4, b.length);
 
 console.log('\n== 10. rota inexistente ==');
 r = await call('/api/nada'); ok('404 com lista de rotas', r.status === 404 && (await j(r)).rotas?.length > 0);
+
+console.log('\n== 7b. priorizacao e motivos de recusa ==');
+{
+  let mm = await rpc('tools/call', { name:'goworker_tipos_de_alto_risco', arguments:{} });
+  const T = mm.result?.structuredContent;
+  ok('3 tipos sobrevivem a Bonferroni', T?.tipos?.length === 3, T?.tipos?.length);
+  ok('todos com p ajustado < 0.05', T.tipos.every(t => t.pAjustado < 0.05), JSON.stringify(T.tipos.map(t=>t.pAjustado)));
+  ok('encolhimento reduz o lift de amostra pequena',
+     T.tipos.find(t=>t.kind==='novo_servico')?.liftEncolhido < T.tipos.find(t=>t.kind==='novo_servico')?.lift);
+  mm = await rpc('tools/call', { name:'goworker_motivos_de_recusa', arguments:{} });
+  const M = mm.result?.structuredContent;
+  ok('152 recusas com motivo registrado', M?.recusas === 152 && M?.comMotivoRegistrado === 152,
+     `${M?.recusas}/${M?.comMotivoRegistrado}`);
+  ok('motivos que dependem de campo financeiro contabilizados', M?.dependemDeCampoFinanceiro > 0, M?.dependemDeCampoFinanceiro);
+  const fila = await j(await call('/api/queue?limite=300'));
+  ok('fila ordenada por prioridade decrescente',
+     fila.every((x,i) => i===0 || fila[i-1].prioridade >= x.prioridade),
+     fila.slice(0,4).map(x=>x.prioridade).join(','));
+  ok('prioridade fica entre 0 e 100', fila.every(x => x.prioridade >= 0 && x.prioridade <= 100));
+  const compras = await j(await call('/api/queue?tipo=compra&limite=100'));
+  ok('filtro por tipo funciona', compras.length > 0 && compras.every(x => x.kind === 'compra'), compras.length);
+}
 
 console.log('\n== 10b. regressoes apontadas pelo red team ==');
 {
@@ -183,7 +223,7 @@ console.log('\n== 11. migracao de schema antigo (env.DB sobrevive a updateApp) =
   ok('run sobre base com schema antigo', rr.status === 200, JSON.stringify(bb).slice(0, 200));
   ok('triagem regravada no formato novo', bb.totalPending === 1058, bb.totalPending);
   rr = await c2('/api/health'); bb = await j(rr);
-  ok('schema marcado na versao atual', bb.schemaVersion === 3, bb.schemaVersion);
+  ok('schema marcado na versao atual', bb.schemaVersion === 4, bb.schemaVersion);
   const q = await j(await c2('/api/queue?acao=BLOQUEAR&limite=50'));
   ok('linha velha some apos migracao', q.every(x => x.action !== 'VELHO') && q.length === EXP.byAction.BLOQUEAR, q.length);
 }

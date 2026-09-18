@@ -98,9 +98,16 @@ footer{padding:18px 24px 40px;color:var(--faint);font-size:12px;max-width:1400px
   <div class="tabs" id="tabs"></div>
   <div class="panel"><table>
     <thead><tr><th>Ação</th><th>Pedido</th><th>Aprovador</th>
-      <th class="num">Parado</th><th class="num">Risco</th></tr></thead>
+      <th class="num">Parado</th><th class="num">Prio</th></tr></thead>
     <tbody id="rows"></tbody>
   </table></div>
+
+  <h2>Por que a fila é ordenada assim</h2>
+  <div class="panel" id="tipos"></div>
+  <div class="note" id="notaPrio"></div>
+
+  <h2>Os 152 motivos de recusa, lidos</h2>
+  <div class="panel" id="motivos"></div>
 
   <h2>Auditoria retroativa — já aprovado com documento inválido</h2>
   <div class="panel" id="retro"></div>
@@ -171,6 +178,31 @@ async function boot(){
     <td class="num muted">${g.medianH===null?'—':g.medianH+'h'}</td>
     <td class="num ${g.idleDays>90?'sev3':'muted'}">${g.idleDays===null?'—':'há '+g.idleDays+'d'}</td></tr>`).join('');
 
+  const TR = S.tiposDeAltoRisco || [], base = 100*(S.taxaBaseRecusa||0);
+  $('#tipos').innerHTML = `<table>
+    <thead><tr><th>Classe do pedido</th><th class="num">Decididos</th><th class="num">Recusados</th>
+      <th class="num">Lift bruto</th><th class="num">Lift encolhido</th><th class="num">p (Bonferroni)</th></tr></thead>
+    <tbody>${TR.map(t=>`<tr><td><code>${t.kind}</code></td><td class="num muted">${fmt(t.n)}</td>
+      <td class="num">${t.recusados}</td><td class="num muted">${t.lift}×</td>
+      <td class="num" style="font-weight:650">${t.liftEncolhido}×</td>
+      <td class="num sev1">${t.pAjustado.toExponential(1)}</td></tr>`).join('')}</tbody></table>`;
+  $('#notaPrio').innerHTML = `<b>Sem valor em reais, a classe do pedido é o único proxy de materialidade
+    que sobrevive à correção de Bonferroni.</b> Taxa-base de recusa da empresa: ${base.toFixed(2)}%.
+    O lift encolhido usa um prior bayesiano de 50 observações, para que classe pequena não finja precisão
+    que não tem. A coluna <b>Prio</b> combina gravidade do achado, esse lift e, por último, a idade.
+    Ordenar só por idade seria pior.`;
+
+  const MR = S.motivosDeRecusa || {};
+  const maxM = Math.max(1, ...(MR.categorias||[]).map(c=>c.n));
+  $('#motivos').innerHTML = `<table>
+    <thead><tr><th>Motivo escrito pelo aprovador</th><th class="num">Recusas</th><th>Detectável hoje?</th></tr></thead>
+    <tbody>${(MR.categorias||[]).filter(c=>c.n>0).map(c=>`<tr>
+      <td>${esc(c.categoria)}<div class="bar"><i style="width:${100*c.n/maxM}%;background:${c.precisaValor?'var(--bloquear)':'var(--liberar)'}"></i></div></td>
+      <td class="num">${c.n}</td>
+      <td class="${c.precisaValor?'sev3':''}">${c.precisaValor?'não — precisa de valor/NF/centro de custo':'sim'}</td></tr>`).join('')}
+    <tr><td class="muted">sem motivo real registrado ("reprovado", "utilizar outro acesso")</td>
+      <td class="num muted">${MR.semCategoria}</td><td class="muted">—</td></tr></tbody></table>`;
+
   const R = S.auditoriaRetroativa || {};
   $('#retro').innerHTML = `<table>
     <thead><tr><th>Fornecedor</th><th>Grafias do CNPJ na base</th><th class="num">Aprovados em grafia inválida</th></tr></thead>
@@ -201,7 +233,7 @@ async function load(){
       <div class="sig">${x.findings.slice(0,2).map(f=>`<span class="sev${f.severity}">■</span> <b>${f.code}</b>`).join(' &nbsp; ')}</div></td>
     <td>${esc(x.approver||'—')}</td>
     <td class="num">${x.age_days===null?'—':Math.round(x.age_days)+'d'}</td>
-    <td class="num">${x.risk}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">vazio</td></tr>';
+    <td class="num" style="font-weight:650">${x.prioridade}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">vazio</td></tr>';
 }
 
 function fila(a){ window.open('/api/queue?aprovador='+encodeURIComponent(a)+'&limite=200','_blank'); }

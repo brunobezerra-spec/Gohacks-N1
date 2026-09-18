@@ -1,6 +1,6 @@
 import { handleMcp } from "./mcp/shim";
 import { defineMcp } from "./mcp/define";
-import { enrich, analyze, summarize, auditRetroativo, ACOES, ZOMBIE_DAYS, APPROVER_IDLE_DAYS } from "./engine";
+import { enrich, analyze, summarize, auditRetroativo, motivosDeRecusa, ACOES, ZOMBIE_DAYS, APPROVER_IDLE_DAYS } from "./engine";
 import { expandSnapshot } from "./snapshot";
 
 // ============================================================================
@@ -22,7 +22,7 @@ const SCHEMA = [
      total_records INTEGER, total_pending INTEGER, summary TEXT)`,
   `CREATE TABLE IF NOT EXISTS triage (
      approval_id INTEGER PRIMARY KEY, run_id INTEGER, action TEXT, risk INTEGER,
-     age_days REAL, approver TEXT, codes TEXT, doc TEXT)`,
+     age_days REAL, approver TEXT, codes TEXT, doc TEXT, prioridade INTEGER, kind TEXT)`,
   `CREATE INDEX IF NOT EXISTS ix_tri_action ON triage(action)`,
   `CREATE INDEX IF NOT EXISTS ix_tri_approver ON triage(approver)`,
   `CREATE TABLE IF NOT EXISTS audit (
@@ -37,7 +37,7 @@ const chunkFor = (cols: number) => Math.max(1, Math.floor(MAX_SQL_VARS / cols));
 
 // env.DB sobrevive a updateApp, entao CREATE TABLE IF NOT EXISTS NAO migra uma
 // tabela cujo formato mudou. Versionamos o schema e recriamos o que e derivado.
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 let ready = false;
 async function init(env: any) {
@@ -190,7 +190,9 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   mark("analyze", { pendentes: a.pending.length });
   const s: any = summarize(a);
   s.auditoriaRetroativa = auditRetroativo(all);
-  mark("summarize", { aprovadosComDocInvalido: s.auditoriaRetroativa.aprovadosComDocInvalido });
+  s.motivosDeRecusa = motivosDeRecusa(all);
+  mark("summarize", { aprovadosComDocInvalido: s.auditoriaRetroativa.aprovadosComDocInvalido,
+    motivosComCampoFinanceiro: s.motivosDeRecusa.dependemDeCampoFinanceiro });
   const ctx = buildContext(all, a.pending);
   mark("contexto", { dossies: ctx.size });
 
@@ -200,23 +202,23 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   const rid = (await env.DB.query("SELECT MAX(id) AS id FROM runs", [])).rows[0].id;
 
   await env.DB.exec("DELETE FROM triage", []);
-  const COLS = 8, CHUNK = chunkFor(COLS);
+  const COLS = 10, CHUNK = chunkFor(COLS);
   for (let i = 0; i < a.pending.length; i += CHUNK) {
     const slice = a.pending.slice(i, i + CHUNK);
-    const ph = slice.map(() => "(?,?,?,?,?,?,?,?)").join(",");
+    const ph = slice.map(() => "(?,?,?,?,?,?,?,?,?,?)").join(",");
     const p: any[] = [];
     for (const r of slice) {
       const doc = {
         action_label: r.actionLabel, why: r.why, kind: r.kind, supplier: r.supplier,
-        cnpj: r.cnpj, title: r.title,
+        cnpj: r.cnpj, title: r.title, liftTipo: r.liftTipo,
         submitted_at: r.submittedAt ? new Date(r.submittedAt).toISOString().slice(0, 19).replace("T", " ") : null,
         findings: r.findings, contexto: ctx.get(r.id) ?? {},
       };
       p.push(r.id, rid, r.action, r.risk,
         r.ageDays === null ? null : Math.round(r.ageDays * 10) / 10,
-        r.approver, r.findings.map((f: any) => f.code).join(","), JSON.stringify(doc));
+        r.approver, r.findings.map((f: any) => f.code).join(","), JSON.stringify(doc), r.prioridade, r.kind);
     }
-    await env.DB.exec(`INSERT INTO triage (approval_id,run_id,action,risk,age_days,approver,codes,doc) VALUES ${ph}`, p);
+    await env.DB.exec(`INSERT INTO triage (approval_id,run_id,action,risk,age_days,approver,codes,doc,prioridade,kind) VALUES ${ph}`, p);
   }
   mark("triagem gravada");
   await logAudit(env, actor, null, "run", { runId: rid, origem, pendentes: s.totalPending, acoes: s.byAction });
@@ -231,20 +233,21 @@ async function lastSummary(env: any) {
   return { runId: row.id, ranAt: row.ran_at, totalRecords: row.total_records, ...JSON.parse(row.summary) };
 }
 
-async function queue(env: any, f: { action?: string; approver?: string; code?: string; limit?: number }) {
+async function queue(env: any, f: { action?: string; approver?: string; code?: string; kind?: string; limit?: number }) {
   const w: string[] = [], p: any[] = [];
   if (f.action) { w.push("action = ?"); p.push(f.action.toUpperCase()); }
   if (f.approver) { w.push("approver LIKE ?"); p.push("%" + f.approver.toLowerCase() + "%"); }
   if (f.code) { w.push("codes LIKE ?"); p.push("%" + f.code.toUpperCase() + "%"); }
+  if (f.kind) { w.push("kind = ?"); p.push(f.kind); }
   p.push(Math.min(f.limit ?? 50, 500));
   const r = await env.DB.query(
-    `SELECT approval_id,action,risk,age_days,approver,doc
+    `SELECT approval_id,action,risk,age_days,approver,doc,prioridade,kind
      FROM triage ${w.length ? "WHERE " + w.join(" AND ") : ""}
-     ORDER BY risk DESC, age_days DESC LIMIT ?`, p);
+     ORDER BY prioridade DESC, risk DESC, age_days DESC LIMIT ?`, p);
   return (r.rows ?? []).map((x: any) => {
     const d = JSON.parse(x.doc || "{}");
     return { approval_id: x.approval_id, action: x.action, action_label: d.action_label,
-      risk: x.risk, why: d.why, age_days: x.age_days, approver: x.approver,
+      risk: x.risk, prioridade: x.prioridade, why: d.why, age_days: x.age_days, approver: x.approver,
       kind: d.kind, supplier: d.supplier, cnpj: d.cnpj, title: d.title,
       submitted_at: d.submitted_at, findings: d.findings ?? [] };
   });
@@ -264,7 +267,8 @@ async function dossier(env: any, id: number) {
   return {
     pedido: { id: row.approval_id, titulo: d.title, tipo: d.kind, beneficiario: d.supplier,
       cnpj: d.cnpj, aprovador: row.approver, submetidoEm: d.submitted_at, paradoHaDias: row.age_days },
-    recomendacao: { acao: row.action, rotulo: d.action_label, porque: d.why, risco: row.risk },
+    recomendacao: { acao: row.action, rotulo: d.action_label, porque: d.why, risco: row.risk,
+      prioridade: row.prioridade, liftDoTipo: d.liftTipo },
     sinais: d.findings ?? [],
     historicoDoBeneficiario: ctx.historicoDoBeneficiario ?? [],
     totalComMesmoTitulo: ctx.totalComMesmoTitulo ?? 0,
@@ -291,8 +295,10 @@ const mcp = defineMcp({
       description: "Lista os pedidos parados ja triados, ordenados por risco. Filtre por acao (BLOQUEAR, REDIRECIONAR, ARQUIVAR, CONFIRMAR, REVISAR, LIBERAR), por aprovador ou por codigo de sinal (ex: FILA_ZUMBI, APROVADOR_INATIVO, CNPJ_INVALIDO).",
       inputSchema: { type: "object", properties: {
         acao: { type: "string", description: "BLOQUEAR | REDIRECIONAR | ARQUIVAR | CONFIRMAR | REVISAR | LIBERAR" },
-        aprovador: { type: "string" }, sinal: { type: "string" }, limite: { type: "number" } } },
-      handler: async (a: any, ctx: any) => queue(ctx.env, { action: a.acao, approver: a.aprovador, code: a.sinal, limit: a.limite }) },
+        aprovador: { type: "string" }, sinal: { type: "string" },
+        tipo: { type: "string", description: "classe do pedido: pagamento, compra, estorno, novo_servico, juros, reembolso..." },
+        limite: { type: "number" } } },
+      handler: async (a: any, ctx: any) => queue(ctx.env, { action: a.acao, approver: a.aprovador, code: a.sinal, kind: a.tipo, limit: a.limite }) },
 
     { name: "goworker_dossie",
       description: "Dossie completo de um pedido: recomendacao, sinais detectados, historico do beneficiario, pedidos com titulo identico, carga do aprovador e trilha de auditoria. E o parecer que o aprovador nao monta hoje.",
@@ -308,6 +314,17 @@ const mcp = defineMcp({
       description: "Olha para tras, nao para a fila: quais pagamentos JA FORAM APROVADOS com CNPJ ou CPF que reprova no digito verificador, e quais fornecedores aparecem na base com mais de uma grafia de CNPJ sendo pelo menos uma invalida (erro de digitacao no cadastro). Dinheiro que ja saiu contra documento que nao passa na conferencia basica.",
       inputSchema: { type: "object", properties: {} },
       handler: async (_a, ctx: any) => { const sm: any = await lastSummary(ctx.env); return sm?.auditoriaRetroativa ?? { erro: "sem execucao" }; } },
+
+    { name: "goworker_motivos_de_recusa",
+      description: "Le o texto livre que os aprovadores escreveram ao recusar, nas 152 recusas historicas, e classifica os motivos. Mostra quantos desses motivos so seriam detectaveis com os campos financeiros (valor, nota fiscal, centro de custo) que o perfil de leitura atual nao entrega.",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_a, ctx: any) => { const sm: any = await lastSummary(ctx.env); return sm?.motivosDeRecusa ?? { erro: "sem execucao" }; } },
+
+    { name: "goworker_tipos_de_alto_risco",
+      description: "Classes de pedido historicamente recusadas acima da media, com lift bruto, lift encolhido (prior bayesiano) e p ajustado por Bonferroni. Sem valor em reais, este e o unico proxy de materialidade que sobrevive a correcao de multiplas comparacoes, e e o que ordena a fila.",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_a, ctx: any) => { const sm: any = await lastSummary(ctx.env);
+        return { taxaBaseRecusa: sm?.taxaBaseRecusa, tipos: sm?.tiposDeAltoRisco ?? [] }; } },
 
     { name: "goworker_gargalos",
       description: "Aprovadores com 10 ou mais pedidos parados, com a mediana historica de decisao de cada um e ha quantos dias agiu pela ultima vez.",
@@ -389,6 +406,7 @@ export default {
           action: url.searchParams.get("acao") ?? undefined,
           approver: url.searchParams.get("aprovador") ?? undefined,
           code: url.searchParams.get("sinal") ?? undefined,
+          kind: url.searchParams.get("tipo") ?? undefined,
           limit: Number(url.searchParams.get("limite") ?? 50),
         }));
       }
