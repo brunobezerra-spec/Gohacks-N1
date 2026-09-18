@@ -460,7 +460,14 @@ const htmlDe = (txt: string) =>
 // Escopo de piloto vem de env.GLPI_PILOTO_APROVADOR; sem ele, nao age em nada,
 // porque agir na base inteira tem que ser decisao explicita.
 async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string; max?: number; piloto?: string | null }) {
-  const piloto = o.piloto !== undefined ? o.piloto : (env.GLPI_PILOTO_APROVADOR ?? null);
+  // O cron dispara sem corpo, entao os parametros do lote vem de secrets.
+  // GLPI_PILOTO_APROVADOR = "" (vazio) significa SEM escopo de piloto.
+  const pilotoEnv = env.GLPI_PILOTO_APROVADOR;
+  const piloto = o.piloto !== undefined ? o.piloto
+    : (pilotoEnv === undefined || String(pilotoEnv).trim() === "" ? null : pilotoEnv);
+  const tipoEnv = env.GLPI_TIPO && String(env.GLPI_TIPO).trim() ? String(env.GLPI_TIPO).trim() : undefined;
+  const maxEnv = Number(env.GLPI_MAX ?? 0);
+  o = { ...o, tipo: o.tipo ?? tipoEnv, max: o.max ?? (maxEnv > 0 ? maxEnv : undefined) };
   const w = ["status = 'pronta'"]; const p: any[] = [];
   if (o.tipo) { w.push("tipo = ?"); p.push(o.tipo.toUpperCase()); }
   // CORRIGIR_CADASTRO fica de fora: corrigir CNPJ em cadastro de fornecedor e
