@@ -137,19 +137,55 @@ ok('ferramenta inexistente = erro JSON-RPC', m.error?.code === -32602);
 console.log('\n== 8. SEGURANCA: o agente escreve, mas nao decide ==');
 {
   const src = (await import('node:fs')).readFileSync('/tmp/bundle.js','utf8');
-  const ini = src.indexOf('SNAPSHOT =');
-  const fim = src.indexOf('expandSnapshot', ini);
-  const semDados = ini >= 0 && fim > ini ? src.slice(0, ini) + src.slice(fim) : src;
+
+  // O bundle tem DUAS coisas que nao sao codigo do agente e poluem qualquer
+  // varredura: o snapshot (dado escrito por usuario no GLPI) e o pdf.js
+  // (biblioteca de terceiro, que carrega dezenas de URL de namespace XML como
+  // string). As duas sao isoladas ANTES da checagem, e cada isolamento tem
+  // asserçao propria: um filtro que silenciosamente nao encontrasse nada
+  // deixaria as checagens passando sobre texto vazio.
+  //
+  // O esbuild marca a origem de cada trecho com um comentario de banner. Isso
+  // separa o que e nosso do que e vendorizado sem depender de heuristica.
+  const banners = [...src.matchAll(/^\/\/ (node_modules\/|src\/|test\/).*$/gm)]
+    .map(m => ({ origem: m[0].slice(3), i: m.index }));
+  const regiao = (filtro) => banners
+    .map((b, k) => ({ ...b, fim: k + 1 < banners.length ? banners[k + 1].i : src.length }))
+    .filter(b => filtro(b.origem))
+    .map(b => src.slice(b.i, b.fim)).join('');
+
+  const nosso = regiao(o => o.startsWith('src/'));
+  ok('bundle separado por origem', banners.length > 10 && nosso.length > 100_000,
+     `${banners.length} banners, ${nosso.length} bytes nossos`);
+
+  // A varredura so vale se a lista de terceiros for a esperada. Dependencia
+  // nova entra por aqui e derruba o teste, que e o ponto: alguem tem que olhar.
+  const pacotes = [...new Set(banners.filter(b => b.origem.startsWith('node_modules/'))
+    .map(b => b.origem.split('/')[1]))];
+  ok('dependencia de terceiro e so a esperada',
+     pacotes.length === 1 && pacotes[0] === 'unpdf', pacotes.join(', '));
+
+  const ini = nosso.indexOf('SNAPSHOT =');
+  const fim = nosso.indexOf('expandSnapshot', ini);
+  const semDados = ini >= 0 && fim > ini ? nosso.slice(0, ini) + nosso.slice(fim) : nosso;
   const code = semDados.replace(/\/\*[\s\S]*?\*\//g,'')
     .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
 
-  ok('snapshot isolado antes da checagem', semDados.length < src.length * 0.5);
+  // Nao e razao sobre o bundle inteiro: com o pdf.js dentro, o snapshot deixou
+  // de ser metade do arquivo sem ter encolhido um byte. O que importa e que o
+  // bloco foi ACHADO e removido, e ele tem mais de 1 MB.
+  ok('snapshot isolado antes da checagem',
+     ini >= 0 && fim > ini && nosso.length - semDados.length > 1_000_000,
+     `${nosso.length - semDados.length} bytes removidos`);
 
   // O app AGORA escreve no GLPI de proposito. A garantia nao e mais "nao toca
   // em rede": e que ele nao consegue tomar a decisao de pagamento.
   ok('nunca chama review_approval do MCP', !/review_approval/.test(code));
 
-  // 1. Um unico host externo.
+  // 1. Um unico host externo NO CODIGO DO AGENTE. O pdf.js ficou de fora da
+  //    varredura porque carrega w3.org, ns.adobe.com e xfa.org como string de
+  //    namespace XML. A contrapartida e a asserçao acima: se aparecer uma
+  //    dependencia nova, o teste cai antes de chegar aqui.
   const hosts = [...new Set((code.match(/https?:\/\/[a-z0-9.-]+/gi) || []).map(h => h.toLowerCase()))];
   ok('um unico host externo, o proprio GoService',
      hosts.length === 1 && hosts[0] === 'https://goservice.gocase.com.br', hosts.join(', '));

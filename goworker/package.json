@@ -10,5 +10,10 @@
   "devDependencies": {
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.0"
+  },
+  "scripts": {
+    "build": "esbuild src/server.ts --bundle --format=esm --platform=neutral --minify --outfile=dist/server.js",
+    "pretest": "esbuild src/server.ts --bundle --format=esm --platform=neutral --outfile=/tmp/bundle.js && esbuild test/lib-entry.ts --bundle --format=esm --platform=neutral --outfile=/tmp/lib.js",
+    "test": "node test/harness.mjs && node test/agente.mjs && node test/dashboard.mjs && node test/anexos.test.mjs && node test/pdf.test.mjs"
   }
 }

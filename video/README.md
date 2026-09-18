@@ -4,12 +4,18 @@ Deck de 5 slides em Remotion, para apresentar ao vivo em ~3 minutos.
 1920x1080, padrão de marca Gogroup.
 
 ```bash
-npm run deck          # abre o deck em http://localhost:5188 — é isso que você apresenta e edita
+npm run deck:html     # gera dist-deck/deck.html: UM arquivo, abre com duplo clique, sem servidor
+npm run deck          # o mesmo deck em http://localhost:5188, com edição de texto ligada
 ```
 
-**Teclas:** `→` avança · `←` volta · `E` edita · `R` repete a animação de entrada ·
-`F` tela cheia · `1`-`5` pula · `ESC` sai da edição. Clicar na tela também avança.
-A barra de navegação some sozinha depois de 2,5 s.
+O `deck.html` é o que você leva para apresentar: fontes, logos e código embutidos em
+586 KB, roda offline, no navegador de qualquer máquina. Animação de entrada por slide,
+passagem manual. Editar texto não funciona lá — é no `npm run deck` (veja abaixo) e
+depois roda o `deck:html` de novo.
+
+**Teclas:** `→` avança · `←` volta · `R` repete a animação de entrada · `F` tela cheia ·
+`1`-`5` pula direto para um slide. Clicar na tela também avança. A barra de navegação
+some sozinha depois de 2,5 s. No `npm run deck` há ainda `E` (edita) e `ESC` (sai da edição).
 
 ## Editar o texto
 
@@ -38,7 +44,7 @@ Layout novo é código, em `src/slides/`.
 ## Outros formatos (opcional)
 
 ```bash
-npm run deck:build                                       # deck estático em dist-deck/ (sem edição)
+npm run deck:build                                       # mesma coisa, mas em vários arquivos
 npm run studio                                           # editor do Remotion
 npm run render                                           # MP4 de 3 min (out/)
 npx remotion still Slide-3 out/slide-3.png --frame=400   # PNG de um slide
@@ -65,5 +71,7 @@ src/ui/kit.tsx      moldura de janela, cards, stats, setas de fluxo
 src/slides/         um arquivo por slide, só layout
 src/deck/           o apresentador (Remotion Player + teclado + modo edição)
 src/Root.tsx        composições para render de vídeo e PNG
+src/assets.ts       fonte e logo: data URI no .html, staticFile no resto
 vite.config.ts      grava /api/conteudo de volta em src/conteudo.json (só em dev)
+scripts/build-single.mjs  junta bundle + fontes + logos num deck.html só
 ```

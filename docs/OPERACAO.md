@@ -5,17 +5,18 @@
 ```bash
 cd goworker
 npm install
-npx esbuild src/server.ts --bundle --format=esm --platform=neutral --outfile=/tmp/bundle.js
-
-node test/harness.mjs        # 79 testes, 2 falhando (ver README)
-node test/agente.mjs         # 99 testes
-node test/dashboard.mjs      # 47 testes
-node test/anexos.test.mjs    # 23 testes
-node test/pdf.test.mjs       #  5 testes
+npm test        # 255 testes em 5 suítes
 ```
 
-`npm install` passou a ser necessário quando o `unpdf` entrou. Antes disso o worker não
-tinha dependência de runtime.
+`pretest` reconstrói `/tmp/bundle.js` e `/tmp/lib.js` antes de cada rodada. Isso não é
+conveniência: as suítes leem o **bundle**, não os `.ts` soltos, e uma rodada contra artefato
+velho dá verde sobre código que não existe mais. Já aconteceu.
+
+Motor sobre um dataset inteiro, com o que o agente decide:
+
+```bash
+node src/run.js ../data/approvals_full.json
+```
 
 Varredura de anexos fora do worker, contra o GLPI real:
 
@@ -23,9 +24,8 @@ Varredura de anexos fora do worker, contra o GLPI real:
 GLPI_APP_TOKEN=... GLPI_USER_TOKEN=... node src/varrer-anexos.mjs [limite]
 ```
 
-**`node src/run.js` não funciona hoje.** O Node só remove tipos, não resolve import sem
-extensão, e `engine.ts` importa `./regras`. Para rodar o motor sobre um dataset inteiro,
-empacotar `test/lib-entry.ts` com o esbuild e importar o bundle.
+Nada aqui importa `.ts` direto: o Node remove tipos mas não resolve import sem extensão, e
+`engine.ts` importa `./regras`. Tudo passa pelo esbuild, o CLI inclusive.
 
 ## Build e deploy
 
@@ -33,8 +33,7 @@ O deploy sobe um bundle pré-montado, não o código-fonte solto:
 
 ```bash
 cd goworker
-npx esbuild src/server.ts --bundle --format=esm --platform=neutral --minify \
-  --outfile=dist/server.js
+npm run build   # dist/server.js, minificado
 ```
 
 O motivo é o pdf.js: medido em 18/09/2026, o bundler do GoDeploy não conclui com ele na

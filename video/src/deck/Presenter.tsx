@@ -18,11 +18,16 @@ const TITULOS = [
   "Antes x depois",
   "Resultados e próximos passos",
 ];
+// No arquivo .html não há servidor para gravar: editar é coisa do npm run deck.
+const EDITAVEL = import.meta.env.DEV;
+
 const CHAVE = "deck.slide";
 const CHAVE_EDIT = "deck.editando";
 
 // Aberto direto do arquivo (file://) o sessionStorage pode simplesmente lançar.
 const lerSessao = (k: string) => {
+  // Só em dev: o .html é para apresentar e sempre abre no slide 1.
+  if (!EDITAVEL) return null;
   try {
     return sessionStorage.getItem(k);
   } catch {
@@ -30,6 +35,7 @@ const lerSessao = (k: string) => {
   }
 };
 const gravarSessao = (k: string, v: string) => {
+  if (!EDITAVEL) return;
   try {
     sessionStorage.setItem(k, v);
   } catch {
@@ -95,7 +101,7 @@ export const Presenter: React.FC = () => {
       }
       if (digitando) return; // no campo, o teclado é do texto
       const k = e.key;
-      if (k === "e" || k === "E") {
+      if ((k === "e" || k === "E") && EDITAVEL) {
         e.preventDefault();
         setEditando((v) => !v);
       } else if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "Enter") {
@@ -212,7 +218,7 @@ export const Presenter: React.FC = () => {
             opacity: mostrarUi ? 1 : 0, transition: "opacity 400ms",
           }}
         >
-          → avança · ← volta · E edita o texto · R repete a entrada · F tela cheia · 1-5 pula
+          → avança · ← volta{EDITAVEL ? " · E edita o texto" : ""} · R repete a entrada · F tela cheia · 1-5 pula
         </div>
       </div>
     </ConteudoProvider>

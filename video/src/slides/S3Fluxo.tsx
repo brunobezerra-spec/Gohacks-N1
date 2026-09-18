@@ -76,7 +76,6 @@ export const S3Fluxo: React.FC = () => {
   const c = useC().s3;
   const frame = useCurrentFrame();
   const head = useRise(2);
-  const badge = useRise(10);
   const origem = useRise(16);
   const motor = useRise(28);
   const spine = interpolate(frame, [72, 88], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -94,12 +93,12 @@ export const S3Fluxo: React.FC = () => {
           bloco
           style={{ color: C.blue, fontSize: 56, fontWeight: 800, lineHeight: 1.06, letterSpacing: "-0.02em", marginTop: 14 }}
         />
+        <T
+          p="s3.subtitulo"
+          bloco
+          style={{ color: C.blue, fontSize: 32, fontWeight: 600, lineHeight: 1.2, letterSpacing: "-0.01em", marginTop: 10 }}
+        />
       </div>
-      <Card bg={C.blue} style={{ position: "absolute", top: 66, right: 92, width: 330, padding: "20px 24px", ...badge }}>
-        <T p="s3.badgeValor" bloco style={{ color: C.lima, fontSize: 52, fontWeight: 800, lineHeight: 1 }} />
-        <T p="s3.badgeLabel" bloco style={{ color: C.white, fontSize: 17, fontWeight: 500, marginTop: 6, lineHeight: 1.3 }} />
-      </Card>
-
       <Card
         bg={C.white}
         style={{ position: "absolute", left: 92, top: 540, width: 250, padding: 24, border: `3px solid ${C.blue}`, ...origem }}

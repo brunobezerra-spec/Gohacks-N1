@@ -9,7 +9,7 @@ ler o PDF anexado ao chamado. Um extrator caseiro leu 1 de 6 PDFs reais; o pdf.j
 
 ## A separação que sustenta tudo
 
-Quatro camadas, e cada uma responde uma pergunta diferente. A regra é não misturar:
+Cinco camadas, e cada uma responde uma pergunta diferente. A regra é não misturar:
 
 | Camada | Arquivo | Pergunta que responde |
 |---|---|---|
@@ -31,7 +31,7 @@ dígito verificador de CNPJ e CPF, parser do título do pedido, baselines por fo
 por tipo, detecção de registro de teste, agrupamento de lote. Sem dependências: importa
 apenas `regras.ts` e `teamguide.ts`.
 
-### `regras.ts` (167 linhas)
+### `regras.ts` (176 linhas)
 Fonte única de quais sinais existem. Cada entrada tem `ativo`, `severidade`
 (`TRAVA` | `RESSALVA` | `ARQUIVAR`), a base normativa e o **texto literal de quem revisou**,
 sem paráfrase. Origem: handoff do CFO de 18/09/2026 sobre a execução #22.
@@ -50,7 +50,7 @@ das empresas do grupo), a tabela de alçadas do Art. 7 (≤20k Gerente, 20-50k D
 Sócio), o cálculo de dias úteis com feriados nacionais do Art. 8, os ciclos de pagamento do
 Art. 9 e o prazo de estorno do Art. 11.
 
-### `agent.ts` (527 linhas)
+### `agent.ts` (544 linhas)
 Decide uma das sete ações por pedido e redige a mensagem. `montarContexto` agrega o
 histórico; `processar` decide um pedido; `processarFila` roda o lote; `montarPlanoCAP` e
 `montarLotesCAP` montam o lote de contas a pagar no ciclo certo; `redigirDevolucao` e
@@ -78,7 +78,7 @@ O encerramento é idempotente: "o item já está solucionado" conta como entregu
 objetivo foi alcançado. Sem isso, ids já fechados voltavam em todo lote e travavam a fila
 atrás deles.
 
-### `anexos.ts`
+### `anexos.ts` (493 linhas)
 Abre o documento anexado ao chamado e confere contra o pedido. É a única fonte que responde
 "esse número está certo?", em vez de só "esse número é plausível?".
 
@@ -108,7 +108,7 @@ Quatro detalhes que custaram tempo e estão fixados no código:
 3. Razão próxima de 10, 100 ou 1000 é casa decimal deslocada, não divergência comercial, e a
    mensagem ao solicitante diz isso.
 
-### `pdf.ts`
+### `pdf.ts` (46 linhas)
 PDF para texto via pdf.js. O que importa para o agente é a **classificação** do resultado:
 texto com menos de 120 caracteres ou sem nenhum número com centavos significa "não consegui
 ler", nunca "o valor não bate". Confundir os dois devolveria pedido bom por defeito de
@@ -128,7 +128,7 @@ Este módulo é o motivo de o deploy subir um bundle pré-montado. Ver
 A lista fechada de tipos de ação. Garantia estrutural: o agente só consegue emitir o que
 está aqui, e nada aqui aprova ou recusa.
 
-### `server.ts` (1024 linhas)
+### `server.ts` (1072 linhas)
 Roteador HTTP, persistência em `env.DB` e as 22 ferramentas MCP. `runAgent` é o pipeline de
 uma execução. `executarNoGlpi` é o único ponto que chama o executor.
 
@@ -184,8 +184,19 @@ que endpoints aparecem, que URLs externas existem, onde há `fetch()`. O snapsho
 antes da checagem, porque é dado e pode conter qualquer palavra que um usuário escreveu no
 GLPI. Uma trava que existe só no fonte não prova nada sobre o que foi publicado.
 
-Duas asserções dessa seção ficaram **desatualizadas** ao embutir o pdf.js, e falham hoje:
-`snapshot isolado antes da checagem` (o snapshot deixou de ser metade do bundle) e
-`um unico host externo` (o pdf.js carrega URLs de namespace XML como string). As onze
-asserções que provam as travas de veredito e de endpoint continuam passando. O conserto é
-ajustar a lista de exceções do harness, não o agente.
+Embutir o pdf.js quebrou duas premissas dessa seção, e o conserto mudou o método de
+isolamento. Antes, "isolar o snapshot" era medir se o bundle encolhia mais da metade; com o
+pdf.js dentro, o snapshot deixou de ser metade do arquivo sem ter encolhido um byte. E a
+varredura de host passou a achar `w3.org`, `ns.adobe.com` e `xfa.org`, que o pdf.js carrega
+como string de namespace XML e nunca busca.
+
+O harness agora **separa o bundle por origem** antes de varrer, usando os comentários de
+banner que o esbuild emite (`// src/...`, `// node_modules/...`). As checagens de segurança
+rodam só sobre o código do agente. Isso abriria uma brecha, porque uma biblioteca vendorizada
+deixaria de ser varrida, então entrou a asserção que a fecha: **a lista de dependências de
+terceiro tem que ser exatamente `unpdf`**. Dependência nova derruba o teste e obriga alguém a
+olhar.
+
+Duas asserções guardam o próprio isolamento, para que um filtro que não encontrasse nada não
+deixe as checagens passando sobre texto vazio: `bundle separado por origem` e `snapshot
+isolado antes da checagem`, esta última agora sobre os bytes removidos, não sobre uma razão.

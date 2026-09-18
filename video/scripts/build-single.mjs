@@ -54,4 +54,4 @@ const único = html
 const destino = path.join(saida, "deck.html");
 fs.writeFileSync(destino, único);
 const mb = (fs.statSync(destino).size / 1024 / 1024).toFixed(2);
-console.log(`pronto: dist-deck/deck.html (${mb} MB) — abre com duplo clique, sem servidor`);
+console.log(`\npronto (${mb} MB), abre com duplo clique e sem servidor:\n${destino}\n`);

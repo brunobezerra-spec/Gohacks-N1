@@ -146,24 +146,29 @@ Dados de referência, todos com data e evidência: `aprovadores.ts` (nível por 
 ```bash
 cd goworker
 npm install
-npx esbuild src/server.ts --bundle --format=esm --platform=neutral --outfile=/tmp/bundle.js
-node test/harness.mjs      # 79  motor, política, travas do bundle publicado
-node test/agente.mjs       # 99  decisão, execução, GLPI mockado
-node test/dashboard.mjs    # 47  DOM real, acentuação, sem "undefined" na tela
-node test/anexos.test.mjs  # 23  extração de campos, conferência, anexo ilegível
-node test/pdf.test.mjs     #  5  classificação do PDF: lido x sem camada de texto
+npm test
 ```
 
-**251 testes, 249 passando.** As duas falhas estão em `harness.mjs`, na seção 8, e **nenhuma
-delas é regressão de segurança**: as onze asserções que provam as travas continuam passando.
+`pretest` reconstrói `/tmp/bundle.js` e `/tmp/lib.js` antes de cada rodada, de propósito: os
+testes leem o **bundle**, e rodar contra um artefato velho dá verde sobre código que não
+existe mais.
 
-| Teste falhando | Por quê |
-|---|---|
-| `snapshot isolado antes da checagem` | asserta que remover o snapshot corta mais de 50% do bundle. Com o pdf.js dentro, o snapshot deixou de ser metade do bundle |
-| `um unico host externo, o proprio GoService` | o pdf.js carrega URLs de namespace XML como string (`w3.org`, `ns.adobe.com`, `xfa.org`). São constantes, não chamadas |
+| Suíte | Testes | O que cobre |
+|---|---|---|
+| `harness.mjs` | 81 | motor, política, rotas, MCP e as travas do bundle publicado |
+| `agente.mjs` | 99 | decisão, execução, GLPI mockado |
+| `dashboard.mjs` | 47 | DOM real, acentuação, sem "undefined" na tela |
+| `anexos.test.mjs` | 23 | extração de campos, conferência, anexo ilegível |
+| `pdf.test.mjs` | 5 | classificação do PDF: lido x sem camada de texto |
 
-As duas asseguram propriedades do **bundle**, não do agente, e as duas premissas quebraram
-ao embutir o pdf.js. Corrigir é ajustar a lista de exceções do harness.
+**255 testes, 0 falhas.**
+
+A seção 8 do harness verifica o bundle, não o fonte, e isola antes de varrer as duas coisas
+que não são código do agente: o snapshot (dado escrito por usuário no GLPI) e o pdf.js
+(carrega `w3.org`, `ns.adobe.com` e `xfa.org` como string de namespace XML). Como a varredura
+de host passou a ignorar o vendorizado, entrou a asserção que fecha a brecha: **a lista de
+dependências de terceiro tem que ser exatamente `unpdf`**. Dependência nova derruba o teste,
+que é o ponto.
 
 ## Limites declarados
 
@@ -196,10 +201,10 @@ docs/       handoff do CFO, arquitetura, operação
 video/      deck de 5 slides para apresentar ao vivo, e o render em vídeo
 ```
 
-O deploy sobe um **bundle pré-montado** (`goworker/dist/server.js`), não o código-fonte
-solto: o bundler do GoDeploy não conclui com o pdf.js na árvore de dependência. O comando
-está em [docs/OPERACAO.md](docs/OPERACAO.md). O `dist/` fica fora do versionamento porque o
-build é reprodutível byte a byte.
+O deploy sobe um **bundle pré-montado** (`npm run build` → `goworker/dist/server.js`), não o
+código-fonte solto: o bundler do GoDeploy não conclui com o pdf.js na árvore de dependência.
+O `dist/` fica fora do versionamento porque o build é reprodutível byte a byte. Detalhes em
+[docs/OPERACAO.md](docs/OPERACAO.md).
 
 **`data/` contém dado interno real** (nomes, estrutura organizacional, alçadas, valores e
 tickets do GoService). O repositório é privado por causa disso. Não tornar público sem

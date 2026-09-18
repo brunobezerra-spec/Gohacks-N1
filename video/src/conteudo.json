@@ -68,19 +68,18 @@
     "provas": [
       {
         "label": "O que o carimbo deixou passar",
-        "texto": "37 cadastros com CNPJ ou CPF que reprova no dígito verificador já receberam 162 pagamentos"
+        "texto": "37 cadastros com CNPJ ou CPF que reprova no dígito verificador já receberam 162 aprovações"
       },
       {
         "label": "SEFAZ de São Paulo",
-        "texto": "O mesmo órgão com 3 grafias de CNPJ, 2 inválidas: 88 pagamentos aprovados contra elas"
+        "texto": "O mesmo órgão com 3 grafias de CNPJ, 2 inválidas: 88 aprovações efetuadas contra elas"
       }
     ]
   },
   "s3": {
     "eyebrow": "O que entregamos",
-    "titulo": "Uma peneira entre quem pede e quem assina",
-    "badgeValor": "79%",
-    "badgeLabel": "da fila nunca chega à mesa do diretor",
+    "titulo": "Uma peneira entre quem submete e quem aprova",
+    "subtitulo": "O agente avalia, decide e direciona.",
     "origemLabel": "Solicitante",
     "origemValor": "1.071",
     "origemNota": "pedidos parados",
@@ -188,7 +187,7 @@
       {
         "n": "02",
         "titulo": "Goworkers nas demais atividades do financeiro",
-        "desc": "Mesmo motor, outro parser e outro conjunto de regras"
+        "desc": "Vários motores (Claude, Grokbot, o que vier de novidade), mesmo conceito: Goworkers em tudo."
       },
       {
         "n": "03",
