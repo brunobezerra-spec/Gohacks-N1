@@ -1,6 +1,6 @@
 import { handleMcp } from "./mcp/shim";
 import { defineMcp } from "./mcp/define";
-import { enrich, analyze, summarize, ACOES, ZOMBIE_DAYS, APPROVER_IDLE_DAYS } from "./engine";
+import { enrich, analyze, summarize, auditRetroativo, ACOES, ZOMBIE_DAYS, APPROVER_IDLE_DAYS } from "./engine";
 import { expandSnapshot } from "./snapshot";
 
 // ============================================================================
@@ -35,10 +35,28 @@ const SCHEMA = [
 export const MAX_SQL_VARS = 90;
 const chunkFor = (cols: number) => Math.max(1, Math.floor(MAX_SQL_VARS / cols));
 
+// env.DB sobrevive a updateApp, entao CREATE TABLE IF NOT EXISTS NAO migra uma
+// tabela cujo formato mudou. Versionamos o schema e recriamos o que e derivado.
+export const SCHEMA_VERSION = 3;
+
 let ready = false;
 async function init(env: any) {
   if (ready) return;
-  for (const s of SCHEMA) await env.DB.exec(s, []);
+  await env.DB.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)", []);
+  const cur = await env.DB.query("SELECT v FROM meta WHERE k = 'schema_version'", []);
+  const atual = Number(cur.rows?.[0]?.v ?? 0);
+
+  if (atual < SCHEMA_VERSION) {
+    // triage e 100% derivada: recriar e barato e nao perde nada.
+    // approvals, runs e audit sao preservadas.
+    console.log(`[schema] migrando ${atual} -> ${SCHEMA_VERSION}: recriando triage`);
+    await env.DB.exec("DROP TABLE IF EXISTS triage", []);
+  }
+  for (const stmt of SCHEMA) await env.DB.exec(stmt, []);
+  if (atual < SCHEMA_VERSION) {
+    await env.DB.exec("INSERT INTO meta (k, v) VALUES ('schema_version', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+      [String(SCHEMA_VERSION)]);
+  }
   ready = true;
 }
 
@@ -170,8 +188,9 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   mark("enrich");
   const a = analyze(all);
   mark("analyze", { pendentes: a.pending.length });
-  const s = summarize(a);
-  mark("summarize");
+  const s: any = summarize(a);
+  s.auditoriaRetroativa = auditRetroativo(all);
+  mark("summarize", { aprovadosComDocInvalido: s.auditoriaRetroativa.aprovadosComDocInvalido });
   const ctx = buildContext(all, a.pending);
   mark("contexto", { dossies: ctx.size });
 
@@ -285,6 +304,11 @@ const mcp = defineMcp({
       inputSchema: { type: "object", properties: {} },
       handler: async (_a, ctx: any) => { const s: any = await lastSummary(ctx.env); return s?.orfas ?? []; } },
 
+    { name: "goworker_auditoria_retroativa",
+      description: "Olha para tras, nao para a fila: quais pagamentos JA FORAM APROVADOS com CNPJ ou CPF que reprova no digito verificador, e quais fornecedores aparecem na base com mais de uma grafia de CNPJ sendo pelo menos uma invalida (erro de digitacao no cadastro). Dinheiro que ja saiu contra documento que nao passa na conferencia basica.",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_a, ctx: any) => { const sm: any = await lastSummary(ctx.env); return sm?.auditoriaRetroativa ?? { erro: "sem execucao" }; } },
+
     { name: "goworker_gargalos",
       description: "Aprovadores com 10 ou mais pedidos parados, com a mediana historica de decisao de cada um e ha quantos dias agiu pela ultima vez.",
       inputSchema: { type: "object", properties: {} },
@@ -320,7 +344,8 @@ export default {
       if (path === "/api/health") {
         const c = await env.DB.query("SELECT COUNT(*) n FROM approvals", []);
         const tr = await env.DB.query("SELECT COUNT(*) n FROM triage", []);
-        return json({ ok: true, ingeridos: c.rows[0].n, triados: tr.rows[0].n, fonte: c.rows[0].n > 0 ? "ingerido" : "snapshot embutido", regras: { ZOMBIE_DAYS, APPROVER_IDLE_DAYS }, acoes: Object.keys(ACOES) });
+        const rn = await env.DB.query("SELECT COUNT(*) n FROM runs", []);
+        return json({ ok: true, schemaVersion: SCHEMA_VERSION, execucoes: rn.rows[0].n, ingeridos: c.rows[0].n, triados: tr.rows[0].n, fonte: c.rows[0].n > 0 ? "ingerido" : "snapshot embutido", regras: { ZOMBIE_DAYS, APPROVER_IDLE_DAYS }, acoes: Object.keys(ACOES) });
       }
 
       if (path === "/api/ingest" && request.method === "POST") {

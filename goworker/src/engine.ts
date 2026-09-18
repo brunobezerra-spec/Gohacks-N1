@@ -230,9 +230,12 @@ export const APPROVER_IDLE_DAYS = 90;
 
 const median = (a) => { if (!a.length) return null; const s=[...a].sort((x,y)=>x-y); const m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; };
 const pctl = (a,q) => { if (!a.length) return null; const s=[...a].sort((x,y)=>x-y); return s[Math.min(s.length-1, Math.floor(q*s.length))]; };
-const dayKey = (ts) => new Date(ts).toISOString().slice(0,10);
+// parseDate guarda UTC verdadeiro; para o dia-calendario de Sao Paulo, volta 3h.
+const dayKey = (ts) => new Date(ts - 3 * HOUR).toISOString().slice(0,10);
 
-export const RE_TESTE = /\btestes?\b|automa[cç][aã]o|n[aã]o [eé] um chamado real|homolog|\bdummy\b|\bfake\b/i;
+// Cuidado: "automacao" sozinho pega fornecedor real (PCTEC SOLUCOES EM TI E
+// AUTOMACAO COMERCIAL). So conta como teste na frase de teste de automacao.
+export const RE_TESTE = /\btestes?\b|teste de automa[cç][aã]o|n[aã]o [eé] um chamado real|\bhomolog\w*\b|\bdummy\b|\bfake\b/i;
 
 export function buildKeyProfiles(all) {
   const g = new Map();
@@ -253,13 +256,73 @@ export function buildKeyProfiles(all) {
   return prof;
 }
 
+// Que nomes ja apareceram sob cada CNPJ, e com que taxa de recusa cada
+// beneficiario foi decidido. Base para as regras de identidade.
+export function buildPartyIndex(all) {
+  const porCnpj = new Map();          // cnpj -> Set de nomes normalizados vistos em decididos
+  const decididosPorCnpj = new Map(); // cnpj -> quantas decisoes ja houve
+  const recusa = new Map();           // partyKey -> {aprovados, recusados, nome}
+  for (const r of all) {
+    if (r.status === 'Aguardando') continue;
+    if (r.cnpj) decididosPorCnpj.set(r.cnpj, (decididosPorCnpj.get(r.cnpj) ?? 0) + 1);
+    if (r.cnpj && r.supplierNorm) {
+      if (!porCnpj.has(r.cnpj)) porCnpj.set(r.cnpj, new Set());
+      porCnpj.get(r.cnpj).add(r.supplierNorm);
+    }
+    if (r.partyKey) {
+      if (!recusa.has(r.partyKey)) recusa.set(r.partyKey, { aprovados: 0, recusados: 0, nome: r.supplier });
+      const e = recusa.get(r.partyKey);
+      if (r.status === 'Aprovado') e.aprovados++;
+      if (r.status === 'Recusado') e.recusados++;
+      if (!e.nome && r.supplier) e.nome = r.supplier;
+    }
+  }
+  return { porCnpj, decididosPorCnpj, recusa };
+}
+
+// Dois nomes "batem" se forem plausivelmente a mesma entidade. Precisa aguentar
+// as tres sujeiras reais do cadastro do GLPI, sem as quais a regra vira ruido:
+//   (a) grafia colada:   "JOSECAMILODOSREIS"  vs "jose camilo reis"
+//   (b) abreviacao:      "Unixlog"            vs "unix logistica transportes"
+//   (c) digitos no nome: "62.238.058 JONAS B" vs "jonas barboza viana"
+// So devolve false quando os nomes nao tem NENHUMA relacao plausivel.
+export function nomesCompativeis(a, b) {
+  const limpa = (x) => String(x || '').replace(/\d/g, ' ').replace(/\s+/g, ' ').trim();
+  const A = limpa(a), B = limpa(b);
+  if (!A || !B) return true;                       // sem nome util: nao acusa
+
+  const ca = A.replace(/ /g, ''), cb = B.replace(/ /g, '');
+  if (!ca || !cb) return true;
+
+  // (a) e (b): um e prefixo ou subcadeia do outro, com massa suficiente
+  const curto = ca.length <= cb.length ? ca : cb;
+  const longo = ca.length <= cb.length ? cb : ca;
+  if (curto.length >= 4 && longo.includes(curto)) return true;
+  if (curto.length >= 6 && longo.startsWith(curto.slice(0, 6))) return true;
+
+  // token forte em comum
+  const ta = new Set(A.split(' ').filter(t => t.length >= 4));
+  const tb = new Set(B.split(' ').filter(t => t.length >= 4));
+  if (!ta.size || !tb.size) return true;
+  for (const t of ta) if (tb.has(t)) return true;
+
+  // prefixo de 5 letras em comum entre tokens fortes (VERDEX / VERDASCA nao passa,
+  // mas TRANSPORTES / TRANSPORTE sim)
+  for (const t of ta) for (const u of tb) if (t.slice(0, 5) === u.slice(0, 5)) return true;
+
+  return false;
+}
+
 export function buildApproverActivity(all, now) {
   const act = new Map();
   for (const r of all) {
     if (!r.approver) continue;
-    if (!act.has(r.approver)) act.set(r.approver, { decided: 0, pending: 0, lastDecisionAt: null, hours: [] });
+    if (!act.has(r.approver)) act.set(r.approver, { decided: 0, pending: 0, lastDecisionAt: null, oldestPendingAt: null, hours: [] });
     const e = act.get(r.approver);
-    if (r.status === 'Aguardando') e.pending++;
+    if (r.status === 'Aguardando') {
+      e.pending++;
+      if (r.submittedAt && (!e.oldestPendingAt || r.submittedAt < e.oldestPendingAt)) e.oldestPendingAt = r.submittedAt;
+    }
     else {
       e.decided++;
       if (r.decidedAt && (!e.lastDecisionAt || r.decidedAt > e.lastDecisionAt)) e.lastDecisionAt = r.decidedAt;
@@ -269,6 +332,10 @@ export function buildApproverActivity(all, now) {
   for (const e of act.values()) {
     e.medianH = median(e.hours); e.p90H = pctl(e.hours, 0.9);
     e.idleDays = e.lastDecisionAt ? (now - e.lastDecisionAt) / DAY : null;
+    // Quem nunca decidiu nada nao tem lastDecisionAt. Se segura fila, e orfa igual:
+    // usa a idade do pedido mais antigo como proxy de ha quanto tempo nada acontece.
+    e.nuncaDecidiu = e.decided === 0;
+    if (e.nuncaDecidiu && e.oldestPendingAt) e.idleDays = (now - e.oldestPendingAt) / DAY;
     delete e.hours;
   }
   return act;
@@ -279,6 +346,7 @@ export function analyze(all, opts = {}) {
   const base = opts.baselines || buildBaselines(all);
   const prof = buildKeyProfiles(all);
   const activity = buildApproverActivity(all, now);
+  const parties = buildPartyIndex(all);
 
   const bySecond = new Map();
   for (const r of all) {
@@ -299,6 +367,48 @@ export function analyze(all, opts = {}) {
     // R1 registro de teste vivo na fila de producao
     if (isTest) findings.push({ code: 'REGISTRO_DE_TESTE', severity: 2,
       msg: 'Titulo identifica registro de teste. Nao e pedido real: polui a fila e as metricas.', evidence: [] });
+
+    // R10 o CNPJ tem historico, mas SEMPRE sob outro nome. CNPJ conhecido nao torna
+    // o pedido seguro se quem recebe mudou. Este era o buraco que liberava
+    // ONFLY TECNOLOGIA num CNPJ cujo historico inteiro era de outra pessoa fisica.
+    const nomeEhLixo = !/[a-z]{3}/.test(r.supplierNorm || '');
+    if (r.money && !isTest && r.cnpj && r.supplierNorm && !nomeEhLixo) {
+      const nomes = parties.porCnpj.get(r.cnpj);
+      // exige historico com pelo menos 2 decisoes: uma unica ocorrencia antiga
+      // nao e evidencia suficiente para bloquear um pagamento.
+      const forte = nomes && nomes.size && (parties.decididosPorCnpj.get(r.cnpj) ?? 0) >= 2;
+      if (forte && ![...nomes].some(n => nomesCompativeis(r.supplierNorm, n))) {
+        findings.push({ code: 'NOME_DIVERGE_DO_CNPJ', severity: 3,
+          msg: `O CNPJ ${r.cnpj} ja foi usado ${nomes.size === 1 ? 'sempre' : 'so'} sob outro nome (${[...nomes].slice(0,2).join(' / ')}). Aqui aparece como "${r.supplier}".`,
+          evidence: [{ cnpj: r.cnpj, nomesHistoricos: [...nomes].slice(0, 5), nomeAtual: r.supplier }] });
+      }
+    }
+
+    // R11 autoaprovacao: a mesma pessoa pede e aprova. Quebra de segregacao de
+    // funcao, detectavel sem nenhum campo financeiro.
+    if (r.requester && r.approver && r.requester === r.approver) {
+      findings.push({ code: 'AUTOAPROVACAO', severity: 3,
+        msg: `${r.approver} e solicitante E aprovador do mesmo pedido. Quebra de segregacao de funcao.`,
+        evidence: [{ pessoa: r.approver }] });
+    }
+
+    // R12 beneficiario com taxa de recusa muito acima da base da empresa (0,9%)
+    if (r.money && !isTest && r.partyKey) {
+      const e = parties.recusa.get(r.partyKey);
+      if (e && e.recusados >= 1 && (e.aprovados + e.recusados) >= 2) {
+        const taxa = e.recusados / (e.aprovados + e.recusados);
+        if (taxa >= 0.15) findings.push({ code: 'BENEFICIARIO_ALTA_RECUSA', severity: 2,
+          msg: `Beneficiario ja teve ${e.recusados} recusa(s) em ${e.aprovados + e.recusados} decisoes (${Math.round(taxa*100)}%). A media da empresa e 0,9%.`,
+          evidence: [{ aprovados: e.aprovados, recusados: e.recusados, taxaPct: Math.round(taxa*100) }] });
+      }
+    }
+
+    // R13 valor vazou para o texto livre do titulo, no lugar do nome do fornecedor.
+    if (r.money && /^\d{1,3}(?:[.,]\d{3})*[.,]\d{2}$|^\d{4,}[.,]\d{2}$/.test((r.supplier || '').trim())) {
+      findings.push({ code: 'VALOR_NO_TITULO', severity: 2,
+        msg: `O titulo traz um numero com cara de valor (${r.supplier}) onde deveria estar o nome do fornecedor. Cadastro mal preenchido.`,
+        evidence: [{ possivelValor: r.supplier }] });
+    }
 
     // R2 documento com digito verificador quebrado (fora de registros de teste)
     if (!isTest && r.cnpj && !isValidCNPJ(r.cnpj)) findings.push({ code: 'CNPJ_INVALIDO', severity: 3,
@@ -369,9 +479,11 @@ export function analyze(all, opts = {}) {
 
 // ---------------------------------------------------------------- recomendacao
 
-const BLOQUEIO   = new Set(['CNPJ_INVALIDO', 'CPF_INVALIDO', 'BENEFICIARIO_SO_RECUSADO']);
+const BLOQUEIO   = new Set(['CNPJ_INVALIDO', 'CPF_INVALIDO', 'BENEFICIARIO_SO_RECUSADO', 'NOME_DIVERGE_DO_CNPJ', 'AUTOAPROVACAO']);
 const ARQUIVO    = new Set(['REGISTRO_DE_TESTE']);
 const REDIRECIONA= new Set(['APROVADOR_INATIVO']);
+// Severidade 2 que fala de CADASTRO (nao de idade): resolve-se corrigindo dado.
+const CADASTRO   = new Set(['BENEFICIARIO_NOVO', 'BENEFICIARIO_ALTA_RECUSA', 'SEM_BENEFICIARIO', 'VALOR_NO_TITULO']);
 
 export const ACOES = {
   BLOQUEAR:     { label: 'Bloquear e corrigir cadastro', ordem: 1 },
@@ -392,8 +504,11 @@ export function decide(findings) {
   if (hit(BLOQUEIO))          { action='BLOQUEAR';     why='Cadastro do beneficiario esta invalido. Corrigir antes de qualquer decisao.'; }
   else if (hit(ARQUIVO))      { action='ARQUIVAR';     why='Registro de teste ocupando a fila de producao.'; }
   else if (hit(REDIRECIONA))  { action='REDIRECIONAR'; why='O dono da fila parou de decidir. Sem trocar o aprovador isso nunca anda.'; }
+  // Cadastro vem ANTES de idade: um pedido velho E com pendencia de cadastro
+  // precisa do cadastro resolvido primeiro, senao reconfirmar nao adianta.
+  // FILA_ZUMBI tambem e severidade 2, mas e pendencia de IDADE, nao de cadastro.
+  else if (hit(CADASTRO))     { action='REVISAR';      why='Pendencia de cadastro ou beneficiario com historico ruim. Resolver isso antes de decidir.'; }
   else if (codes.has('FILA_ZUMBI')) { action='CONFIRMAR'; why='Velha demais para decidir sem reconfirmar que ainda vale.'; }
-  else if (maxSev >= 2)       { action='REVISAR';      why='Cadastro incompleto ou beneficiario sem historico.'; }
   else                        { action='LIBERAR';      why='Beneficiario recorrente, dentro do padrao, sem pendencia de cadastro.'; }
 
   return { action, actionLabel: ACOES[action].label, why, risk, maxSeverity: maxSev };
@@ -434,5 +549,67 @@ export function summarize(analysis) {
     globalMedianDecisionH: analysis.baselines.globalMedianH,
     globalP90DecisionH: analysis.baselines.globalP90H,
     decidedSample: analysis.baselines.decidedCount,
+  };
+}
+
+// ---------------------------------------------------------------- auditoria retroativa
+
+// A triagem olha para a frente (a fila parada). Esta funcao olha para tras: o que
+// JA FOI APROVADO com cadastro que reprova no digito verificador. Nao e hipotese,
+// e dinheiro que ja saiu contra um documento que nao passa na conferencia basica.
+export function auditRetroativo(all) {
+  const invalido = (r) => (r.cnpj && !isValidCNPJ(r.cnpj)) || (r.cpf && !isValidCPF(r.cpf));
+  const docDe = (r) => r.cnpj ? { doc: r.cnpj, tipo: 'CNPJ' } : { doc: r.cpf, tipo: 'CPF' };
+
+  const aprovados = all.filter(r => r.status === 'Aprovado' && !RE_TESTE.test(r.title || '') && invalido(r));
+
+  const porDoc = new Map();
+  for (const r of aprovados) {
+    const { doc, tipo } = docDe(r);
+    if (!porDoc.has(doc)) porDoc.set(doc, { doc, tipo, n: 0, nome: r.supplier, primeiro: null, ultimo: null });
+    const e = porDoc.get(doc);
+    e.n++;
+    if (!e.nome && r.supplier) e.nome = r.supplier;
+    if (r.submittedAt) {
+      const d = new Date(r.submittedAt).toISOString().slice(0, 10);
+      if (!e.primeiro || d < e.primeiro) e.primeiro = d;
+      if (!e.ultimo || d > e.ultimo) e.ultimo = d;
+    }
+  }
+
+  // Grafias conflitantes: mesmo CNPJ base (raiz + filial, 12 digitos) escrito com
+  // digitos verificadores diferentes. Pelo menos uma das grafias e erro de digitacao.
+  const porBase = new Map();
+  for (const r of all) {
+    if (!r.cnpj) continue;
+    const base = r.cnpj.slice(0, 12);
+    if (!porBase.has(base)) porBase.set(base, new Map());
+    const g = porBase.get(base);
+    if (!g.has(r.cnpj)) g.set(r.cnpj, { cnpj: r.cnpj, valido: isValidCNPJ(r.cnpj), n: 0, aprovados: 0, nome: r.supplier });
+    const e = g.get(r.cnpj);
+    e.n++;
+    if (r.status === 'Aprovado') e.aprovados++;
+    if (!e.nome && r.supplier) e.nome = r.supplier;
+  }
+  const conflitos = [];
+  for (const [base, g] of porBase) {
+    if (g.size < 2) continue;
+    const grafias = [...g.values()];
+    if (grafias.every(x => x.valido)) continue; // filiais distintas, nao e erro
+    conflitos.push({
+      base,
+      nome: grafias.find(x => x.nome)?.nome ?? null,
+      grafias: grafias.sort((a, b) => b.n - a.n),
+      aprovadosEmGrafiaInvalida: grafias.filter(x => !x.valido).reduce((s, x) => s + x.aprovados, 0),
+    });
+  }
+  conflitos.sort((a, b) => b.aprovadosEmGrafiaInvalida - a.aprovadosEmGrafiaInvalida);
+
+  return {
+    aprovadosComDocInvalido: aprovados.length,
+    documentosDistintos: porDoc.size,
+    porDocumento: [...porDoc.values()].sort((a, b) => b.n - a.n).slice(0, 25),
+    conflitosDeGrafia: conflitos.slice(0, 15),
+    totalConflitos: conflitos.length,
   };
 }

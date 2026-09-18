@@ -102,6 +102,9 @@ footer{padding:18px 24px 40px;color:var(--faint);font-size:12px;max-width:1400px
     <tbody id="rows"></tbody>
   </table></div>
 
+  <h2>Auditoria retroativa — já aprovado com documento inválido</h2>
+  <div class="panel" id="retro"></div>
+
   <h2>Filas órfãs — aprovador parou de decidir e continua dono</h2>
   <div class="panel"><table>
     <thead><tr><th>Aprovador</th><th class="num">Parados</th>
@@ -167,6 +170,22 @@ async function boot(){
     <td class="num">${g.pending}</td><td class="num muted">${fmt(g.decided)}</td>
     <td class="num muted">${g.medianH===null?'—':g.medianH+'h'}</td>
     <td class="num ${g.idleDays>90?'sev3':'muted'}">${g.idleDays===null?'—':'há '+g.idleDays+'d'}</td></tr>`).join('');
+
+  const R = S.auditoriaRetroativa || {};
+  $('#retro').innerHTML = `<table>
+    <thead><tr><th>Fornecedor</th><th>Grafias do CNPJ na base</th><th class="num">Aprovados em grafia inválida</th></tr></thead>
+    <tbody>${(R.conflitosDeGrafia||[]).slice(0,8).map(c=>`<tr>
+      <td>${esc((c.nome||'?').slice(0,44))}</td>
+      <td>${c.grafias.map(g=>`<div><code>${g.cnpj.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,'$1.$2.$3/$4-$5')}</code>
+        <span class="${g.valido?'':'sev3'}">${g.valido?'válido':'INVÁLIDO'}</span>
+        <span class="muted">${g.n}x, ${g.aprovados} aprovados</span></div>`).join('')}</td>
+      <td class="num sev3" style="font-size:19px;font-weight:650">${c.aprovadosEmGrafiaInvalida}</td></tr>`).join('')}
+    </tbody></table>`;
+
+  $('#kpis').insertAdjacentHTML('beforeend',
+    `<div class="kpi alert"><div class="n">${fmt(R.aprovadosComDocInvalido)}</div>
+      <div class="l">já aprovados com documento inválido</div>
+      <div class="s">${R.documentosDistintos} documentos · ${R.totalConflitos} fornecedores com grafia conflitante</div></div>`);
 
   $('#foot').innerHTML = `Sinais detectados: ` + Object.entries(S.byCode).sort((a,b)=>b[1]-a[1])
     .map(([k,v]) => `<code>${k}</code> ${v}`).join(' · ') +
