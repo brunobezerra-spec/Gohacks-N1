@@ -148,7 +148,7 @@ export function avaliarPolitica(r: any, ctx: ContextoPolitica) {
 
   // ---- Art. 4 e 7: segregacao de funcoes. Regra declarada INVIOLAVEL.
   if (r.requester && r.approver && r.requester === r.approver) {
-    v.push({ artigo: "Art. 4 e 7", regra: "SEGREGACAO_DE_FUNCOES",
+    v.push({ artigo: "Art. 4 e 7", regra: "AUTOAPROVACAO",
       texto: `"A segregacao de funcoes e regra inviolavel. Nenhuma area ou colaborador podera acumular, no mesmo processo, as funcoes de solicitacao, aprovacao e execucao do pagamento." Aqui ${r.approver} e solicitante e aprovador.`,
       gravidade: 3, corrigivel: false,
       aoSolicitante: "Este pedido precisa de um aprovador diferente de voce. Indique o gestor da sua area." });

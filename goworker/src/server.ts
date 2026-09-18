@@ -6,6 +6,7 @@ import { montarContexto, processarFila, montarLotesCAP, acoesDoItem, processar, 
 import { despachar, validarAcao, TIPOS_PERMITIDOS } from "./outbox";
 import { executar as executarGlpi, credenciaisOk, modo as modoGlpi, assertNaoEhAprovacao, diagnosticoDePerfil } from "./glpi";
 import { NIVEIS_APROVADORES } from "./aprovadores";
+import { REGRAS } from "./regras";
 
 // ============================================================================
 // Goworker do Financeiro
@@ -40,6 +41,15 @@ const SCHEMA = [
      doc TEXT, despachado_em TEXT, resultado TEXT)`,
   `CREATE INDEX IF NOT EXISTS ix_out_status ON outbox(status)`,
   `CREATE INDEX IF NOT EXISTS ix_out_tipo ON outbox(tipo)`,
+  // LIXEIRA (regra 1 do handoff). Area de retencao restauravel, fora da base de
+  // trabalho. E ela que separa higienizacao de perda: sem consulta e sem
+  // restauracao, a regra viraria exclusao com outro nome.
+  // Retencao: nao expira. Decisao do Vinicius pendente; ate la nada e descartado.
+  `CREATE TABLE IF NOT EXISTS lixeira (
+     pedido_id INTEGER PRIMARY KEY, motivo TEXT, dias_sem_movimento INTEGER,
+     movido_em TEXT, execucao INTEGER, snapshot TEXT,
+     restaurado_em TEXT, restaurado_por TEXT, busca TEXT)`,
+  `CREATE INDEX IF NOT EXISTS ix_lix_rest ON lixeira(restaurado_em)`,
   `CREATE TABLE IF NOT EXISTS audit (
      id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, actor TEXT,
      approval_id INTEGER, event TEXT, detail TEXT)`,
@@ -52,7 +62,7 @@ const chunkFor = (cols: number) => Math.max(1, Math.floor(MAX_SQL_VARS / cols));
 
 // env.DB sobrevive a updateApp, entao CREATE TABLE IF NOT EXISTS NAO migra uma
 // tabela cujo formato mudou. Versionamos o schema e recriamos o que e derivado.
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 let ready = false;
 async function init(env: any) {
@@ -67,6 +77,7 @@ async function init(env: any) {
     console.log(`[schema] migrando ${atual} -> ${SCHEMA_VERSION}: recriando triage`);
     await env.DB.exec("DROP TABLE IF EXISTS triage", []);
     await env.DB.exec("DROP TABLE IF EXISTS outbox", []);
+    // a lixeira NAO e recriada em migracao: perderia o que foi arquivado.
   }
   for (const stmt of SCHEMA) await env.DB.exec(stmt, []);
   if (atual < SCHEMA_VERSION) {
@@ -225,6 +236,35 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   const lotesCap = montarLotesCAP(ag.itens, ctxAg);
   mark("agente decidiu", { acoes: ag.porAcao, horas: ag.horasEconomizadas });
 
+  // ---- LIXEIRA (regra 1). Quem ja foi restaurado por um humano nunca volta
+  // para ca sozinho: respeitar a restauracao e o que torna a lixeira confiavel.
+  const rest = await env.DB.query("SELECT pedido_id FROM lixeira WHERE restaurado_em IS NOT NULL", []);
+  const restaurados = new Set((rest.rows ?? []).map((x: any) => Number(x.pedido_id)));
+  const paraLixeira = ag.itens.filter((x: any) => x.acao === "ARQUIVAR_NA_LIXEIRA" && !restaurados.has(x.id));
+  const jaNaLixeira = new Set(((await env.DB.query("SELECT pedido_id FROM lixeira", [])).rows ?? [])
+    .map((x: any) => Number(x.pedido_id)));
+  const novosNaLixeira = paraLixeira.filter((x: any) => !jaNaLixeira.has(x.id));
+  const agoraIso = new Date().toISOString();
+  const CL = 12;
+  for (let i = 0; i < novosNaLixeira.length; i += CL) {
+    const sl = novosNaLixeira.slice(i, i + CL);
+    const ph = sl.map(() => "(?,?,?,?,?,?,?)").join(",");
+    const p: any[] = [];
+    for (const x of sl) {
+      const r = a.pending.find((z: any) => z.id === x.id) ?? {};
+      p.push(x.id, x.porque, x.idadeDias, agoraIso, rid,
+        JSON.stringify({ pedido: { id: x.id, ticketId: r.ticketId, titulo: r.title, fornecedor: r.supplier,
+          cnpj: r.cnpj, valor: r.valor, vencimento: r.vencimento, aprovador: r.approver,
+          solicitante: r.requester, submetidoEm: r.submittedAt ? new Date(r.submittedAt).toISOString() : null },
+          decisao: { acao: x.acao, porque: x.porque, artigos: x.artigosCitados },
+          violacoes: x.violacoes }),
+        [x.id, r.ticketId, r.title, r.supplier, r.cnpj, r.approver, r.requester].filter(Boolean).join(" ").toLowerCase());
+    }
+    await env.DB.exec(`INSERT INTO lixeira (pedido_id,motivo,dias_sem_movimento,movido_em,execucao,snapshot,busca) VALUES ${ph}`, p);
+  }
+  mark("lixeira", { novos: novosNaLixeira.length, total: jaNaLixeira.size + novosNaLixeira.length, restaurados: restaurados.size });
+  const naLixeira = new Set([...jaNaLixeira, ...novosNaLixeira.map((x: any) => x.id)]);
+
   // Uma unica gravacao por pedido, juntando motor e agente.
   const porId = new Map(ag.itens.map((x: any) => [x.id, x]));
   await env.DB.exec("DELETE FROM triage", []);
@@ -239,6 +279,7 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
         JSON.stringify({
           run_id: rid, action: r.action, prioridade: r.prioridade, approver: r.approver,
           usersIdValidate: r.usersIdValidate ?? null, ticketId: r.ticketId ?? null, valor: r.valor ?? null,
+          naLixeira: naLixeira.has(r.id) ? 1 : 0,
           kind: r.kind, codes: r.findings.map((f: any) => f.code).join(","), acao_ag: x.acao ?? null,
           // motor
           action_label: r.actionLabel, why: r.why, risk: r.risk, age_days: r.ageDays === null ? null : Math.round(r.ageDays * 10) / 10,
@@ -273,8 +314,38 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
       base_legal: x.baseLegal, criado_em: agora, payload: x.payload }));
     await env.DB.exec(`INSERT INTO outbox (tipo,pedido_id,status,doc) VALUES ${ph}`, p);
   }
-  mark("outbox gravada", { acoes: acoes.length });
+  // Regra 4: UM chamado de higiene por execucao, com a lista inteira dos
+  // registros de teste encerrados. Nao um por pedido.
+  const testes = ag.itens.filter((x: any) => x.violacoes.some((v: any) => v.regra === "REGISTRO_DE_TESTE"));
+  if (testes.length) {
+    const jaTemHigiene = await env.DB.query(
+      "SELECT COUNT(*) n FROM outbox WHERE tipo = 'ABRIR_CHAMADO_DE_HIGIENE' AND status = 'entregue'", []);
+    if (!(jaTemHigiene.rows?.[0]?.n)) {
+      const linhas = testes.map((x: any) => {
+        const r = a.pending.find((z: any) => z.id === x.id);
+        return `#${x.id} (chamado ${r?.ticketId ?? "?"}) ${String(r?.title ?? "").slice(0, 70)}`;
+      });
+      await env.DB.exec("INSERT INTO outbox (tipo,pedido_id,status,doc) VALUES (?,?,?,?)",
+        ["ABRIR_CHAMADO_DE_HIGIENE", null, "pronta", JSON.stringify({
+          run_id: rid, destinatario: "GoService", criado_em: agora,
+          assunto: `Higiene de base: ${testes.length} registros de teste encerrados pelo Goworker`,
+          base_legal: "Handoff 18/09/2026, regra 4",
+          payload: { titulo: `Higiene de base: ${testes.length} registros de teste encerrados pelo Goworker`,
+            corpo: [
+              `O Goworker do Financeiro encerrou ${testes.length} pedidos que sao registro de teste e nao obrigacao financeira.`,
+              ``,
+              `Eles nao foram notificados individualmente e nao consumiram alcada de aprovacao.`,
+              `Este chamado existe para deixar a lista num lugar so, em vez de abrir ${testes.length} avisos.`,
+              ``,
+              `Lista:`,
+              ...linhas,
+            ].join("\n") } })]);
+    }
+  }
+  mark("outbox gravada", { acoes: acoes.length, higiene: testes.length });
 
+  s.lixeira = { novos: novosNaLixeira.length, total: naLixeira.size, restaurados: restaurados.size,
+    retencao: "não expira; restaurável a qualquer momento" };
   s.agente = {
     porAcao: ag.porAcao, porArtigo: ag.porArtigo, porRegra: ag.porRegra,
     correcoesAutomaticas: ag.correcoesAutomaticas, reroteadosPorAlcada: ag.reroteadosPorAlcada,
@@ -301,8 +372,10 @@ async function lastSummary(env: any) {
   return { runId: row.id, ranAt: row.ran_at, totalRecords: row.total_records, ...JSON.parse(row.summary) };
 }
 
-async function queue(env: any, f: { action?: string; approver?: string; code?: string; kind?: string; limit?: number }) {
+async function queue(env: any, f: { action?: string; approver?: string; code?: string; kind?: string; limit?: number; incluirLixeira?: boolean }) {
   const w: string[] = [], p: any[] = [];
+  // A lixeira sai da base de trabalho: so aparece se pedida de proposito.
+  if (!f.incluirLixeira) w.push("COALESCE(json_extract(doc,'$.naLixeira'),0) = 0");
   if (f.action) { w.push("json_extract(doc,'$.action') = ?"); p.push(f.action.toUpperCase()); }
   if (f.approver) { w.push("json_extract(doc,'$.approver') LIKE ?"); p.push("%" + f.approver.toLowerCase() + "%"); }
   if (f.code) { w.push("json_extract(doc,'$.codes') LIKE ?"); p.push("%" + f.code.toUpperCase() + "%"); }
@@ -366,8 +439,9 @@ async function gravarHH(env: any, novo: any) {
   return merged;
 }
 
-async function filaAgente(env: any, f: { acao?: string; dono?: string; artigo?: string; limite?: number }) {
+async function filaAgente(env: any, f: { acao?: string; dono?: string; artigo?: string; limite?: number; incluirLixeira?: boolean }) {
   const w: string[] = [], p: any[] = [];
+  if (!f.incluirLixeira) w.push("COALESCE(json_extract(doc,'$.naLixeira'),0) = 0");
   if (f.acao) { w.push("json_extract(doc,'$.acao_ag') = ?"); p.push(f.acao.toUpperCase()); }
   if (f.dono) { w.push("doc LIKE ?"); p.push('%"dono":"%' + f.dono.toLowerCase() + '%'); }
   if (f.artigo) { w.push("doc LIKE ?"); p.push("%" + f.artigo + "%"); }
@@ -452,6 +526,50 @@ async function despacharPendentes(env: any, actor: string | null, tipo?: string,
   return { tentadas: res.length, entregues: res.filter(x => x.entregue).length, resultados: res };
 }
 
+// ---------------------------------------------------------------- lixeira
+
+// A lixeira so vale se for consultavel e restauravel. Busca por id do pedido,
+// por chamado, por fornecedor, CNPJ, aprovador ou solicitante.
+async function lerLixeira(env: any, f: { busca?: string; restaurados?: boolean; limite?: number }) {
+  const w: string[] = [], p: any[] = [];
+  if (f.busca) { w.push("busca LIKE ?"); p.push("%" + String(f.busca).toLowerCase() + "%"); }
+  if (f.restaurados === true) w.push("restaurado_em IS NOT NULL");
+  if (f.restaurados === false) w.push("restaurado_em IS NULL");
+  p.push(Math.min(f.limite ?? 50, 500));
+  const r = await env.DB.query(
+    `SELECT pedido_id, motivo, dias_sem_movimento, movido_em, execucao, restaurado_em, restaurado_por, snapshot
+     FROM lixeira ${w.length ? "WHERE " + w.join(" AND ") : ""}
+     ORDER BY dias_sem_movimento DESC LIMIT ?`, p);
+  const tot = await env.DB.query(
+    "SELECT COUNT(*) n, SUM(CASE WHEN restaurado_em IS NULL THEN 1 ELSE 0 END) ativos FROM lixeira", []);
+  return {
+    total: tot.rows?.[0]?.n ?? 0,
+    naLixeira: tot.rows?.[0]?.ativos ?? 0,
+    restaurados: (tot.rows?.[0]?.n ?? 0) - (tot.rows?.[0]?.ativos ?? 0),
+    retencao: "não expira; nada é apagado",
+    itens: (r.rows ?? []).map((x: any) => ({ ...x, snapshot: JSON.parse(x.snapshot || "null") })),
+  };
+}
+
+// Restaurar devolve o pedido a base de trabalho e marca quem restaurou. A partir
+// dai o agente nunca mais arquiva esse pedido sozinho: a decisao humana manda.
+async function restaurarDaLixeira(env: any, ids: number[], quem: string | null) {
+  if (!ids.length) return { restaurados: 0, erro: "informe ao menos um pedido_id" };
+  const agora = new Date().toISOString();
+  const ph = ids.map(() => "?").join(",");
+  await env.DB.exec(
+    `UPDATE lixeira SET restaurado_em = ?, restaurado_por = ? WHERE pedido_id IN (${ph}) AND restaurado_em IS NULL`,
+    [agora, quem ?? "desconhecido", ...ids]);
+  const conf = await env.DB.query(
+    `SELECT pedido_id, restaurado_em, restaurado_por FROM lixeira WHERE pedido_id IN (${ph})`, ids);
+  await logAudit(env, quem, null, "restaurar_da_lixeira", { ids, quando: agora });
+  return {
+    restaurados: (conf.rows ?? []).filter((x: any) => x.restaurado_em === agora).length,
+    itens: conf.rows ?? [],
+    aviso: "Os pedidos voltam a base de trabalho na proxima execucao do agente e nao serao arquivados de novo automaticamente.",
+  };
+}
+
 // ---------------------------------------------------------------- execucao no GLPI
 
 const htmlDe = (txt: string) =>
@@ -478,7 +596,11 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
   if (o.tipo) { w.push("tipo = ?"); p.push(o.tipo.toUpperCase()); }
   // CORRIGIR_CADASTRO fica de fora: corrigir CNPJ em cadastro de fornecedor e
   // ato do Supply/Compras no ERP, nao do agente no chamado.
-  w.push("tipo <> 'CORRIGIR_CADASTRO'");
+  // Acoes internas do agente nao viram chamada ao GoService.
+  //  CORRIGIR_CADASTRO   -> e ato do Supply/Compras no ERP
+  //  MOVER_PARA_LIXEIRA  -> e do proprio livro-razao do agente
+  //  ABRIR_DEMANDA_DE_PRODUTO -> vai para produto, nao para o chamado
+  w.push("tipo NOT IN ('CORRIGIR_CADASTRO','MOVER_PARA_LIXEIRA','ABRIR_DEMANDA_DE_PRODUTO')");
 
   // O escopo do piloto entra NA CONSULTA. Filtrar depois de ler as 20 primeiras
   // fazia o agente gastar o lote inteiro com pedidos de outro aprovador.
@@ -513,6 +635,7 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
       tipo: row.tipo, validationId: row.pedido_id,
       html: pay?.corpo ? htmlDe(pay.corpo) : htmlDe(dd.assunto ?? ""),
       novoLogin: row.tipo === "ROTEAR_PARA_ALCADA" ? (pay?.aprovadorSugerido ?? null) : null,
+      titulo: pay?.titulo ?? dd.assunto ?? null,
     };
   });
 
@@ -644,6 +767,29 @@ const mcp = defineMcp({
         piloto: { type: "string", description: "id GLPI do aprovador do piloto; sem isso usa env.GLPI_PILOTO_APROVADOR" } } },
       handler: async (a: any, ctx: any) => executarNoGlpi(ctx.env, ctx.userEmail, { tipo: a.tipo, max: a.max, piloto: a.piloto }) },
 
+    { name: "goworker_lixeira",
+      description: "Consulta a lixeira do agente: pedidos tirados da base de trabalho por estarem parados sem movimento (regra 1 do handoff). Nada e apagado e nada expira. Busque por id do pedido, numero do chamado, fornecedor, CNPJ, aprovador ou solicitante. Cada item traz o snapshot completo de como o pedido estava quando saiu.",
+      inputSchema: { type: "object", properties: {
+        busca: { type: "string", description: "id, chamado, fornecedor, CNPJ, aprovador ou solicitante" },
+        restaurados: { type: "boolean", description: "true so os ja restaurados, false so os que continuam na lixeira" },
+        limite: { type: "number" } } },
+      handler: async (a: any, ctx: any) => lerLixeira(ctx.env, { busca: a.busca, restaurados: a.restaurados, limite: a.limite }) },
+
+    { name: "goworker_restaurar_da_lixeira",
+      description: "Tira um ou mais pedidos da lixeira e devolve a base de trabalho, registrando quem restaurou. Depois disso o agente NUNCA arquiva esses pedidos sozinho de novo: a decisao humana prevalece sobre a regra.",
+      inputSchema: { type: "object", properties: {
+        ids: { type: "array", items: { type: "number" }, description: "ids de pedido (validationId)" } },
+        required: ["ids"] },
+      handler: async (a: any, ctx: any) => restaurarDaLixeira(ctx.env, (a.ids ?? []).map(Number), ctx.userEmail) },
+
+    { name: "goworker_regras",
+      description: "O registro de regras por sinal, como decidido na revisao de 18/09/2026: quais sinais estao ligados, a severidade de cada um (TRAVA, RESSALVA, ARQUIVAR), a janela de dias quando existe, a base na Politica de Pagamentos e o texto literal de quem revisou.",
+      inputSchema: { type: "object", properties: { sinal: { type: "string" } } },
+      handler: async (a: any) => a.sinal ? (REGRAS as any)[String(a.sinal).toUpperCase()] ?? { erro: "sinal desconhecido" }
+        : { total: Object.keys(REGRAS).length,
+            ativos: Object.values(REGRAS).filter((r: any) => r.ativo).length,
+            regras: Object.values(REGRAS) } },
+
     { name: "goworker_diagnostico_de_perfil",
       description: "Abre uma sessao no GoService e diz em que perfil do GLPI o agente esta, qual o bitmask do direito de chamado, e se ele enxerga TODOS os chamados (bit READALL = 1024) ou so os dos grupos do usuario. E a checagem para saber se o agente consegue trabalhar a fila inteira ou so uma fatia.",
       inputSchema: { type: "object", properties: {} },
@@ -731,6 +877,7 @@ export default {
           acao: url.searchParams.get("acao") ?? undefined,
           dono: url.searchParams.get("dono") ?? undefined,
           artigo: url.searchParams.get("artigo") ?? undefined,
+          incluirLixeira: url.searchParams.get("lixeira") === "1",
           limite: Number(url.searchParams.get("limite") ?? 50) }));
       }
       if (path === "/api/agente/parecer") {
@@ -766,6 +913,18 @@ export default {
           limite: "Nenhum caminho deste app escreve status, is_approved ou comment_validation em TicketValidation. Aprovar e recusar sao do aprovador com alcada (Art. 7).",
         });
       }
+      if (path === "/api/lixeira") {
+        const rp = url.searchParams.get("restaurados");
+        return json(await lerLixeira(env, {
+          busca: url.searchParams.get("busca") ?? undefined,
+          restaurados: rp === "1" ? true : rp === "0" ? false : undefined,
+          limite: Number(url.searchParams.get("limite") ?? 50) }));
+      }
+      if (path === "/api/lixeira/restaurar" && request.method === "POST") {
+        const b: any = await request.json().catch(() => ({}));
+        const ids = (Array.isArray(b.ids) ? b.ids : [b.id]).map(Number).filter(Boolean);
+        return json(await restaurarDaLixeira(env, ids, actor));
+      }
       if (path === "/api/agente/lotes") {
         const sm: any = await lastSummary(env);
         return sm?.agente?.lotesCAP ? json(sm.agente.lotesCAP) : json({ erro: "sem execucao" }, 404);
@@ -789,6 +948,7 @@ export default {
           approver: url.searchParams.get("aprovador") ?? undefined,
           code: url.searchParams.get("sinal") ?? undefined,
           kind: url.searchParams.get("tipo") ?? undefined,
+          incluirLixeira: url.searchParams.get("lixeira") === "1",
           limit: Number(url.searchParams.get("limite") ?? 50),
         }));
       }

@@ -15,15 +15,18 @@ import { avaliarPolitica, construirGrafiasCorretas, alcadaExigida, temAlcada,
          proximoCiclo, somaDiasUteis, PRAZO_TOTAL_DU, DIAS_DE_PAGAMENTO,
          ESTORNO_RECOMENDADO_DIAS, ANEXO_I, type Nivel } from "./policy";
 import { DAY } from "./engine";
+import { severidadeDe, janelaDe, REGRAS } from "./regras";
 
 // ---------------------------------------------------------------- acoes
 
 export const ACOES_AGENTE = {
-  ENCERRAR:              { ordem: 1, dono: "agente",     label: "Encerrar sem pagamento" },
-  DEVOLVER:              { ordem: 2, dono: "solicitante", label: "Devolver ao solicitante" },
-  CORRIGIR_E_ENCAMINHAR: { ordem: 3, dono: "agente",     label: "Corrigir e encaminhar" },
-  RECOMENDAR_ESTORNO:    { ordem: 4, dono: "contas a pagar", label: "Recomendar estorno (Art. 11)" },
-  ENCAMINHAR:            { ordem: 5, dono: "aprovador",  label: "Encaminhar ao aprovador" },
+  ENCERRAR:              { ordem: 1, dono: "agente",          label: "Encerrar sem pagamento" },
+  ARQUIVAR_NA_LIXEIRA:   { ordem: 2, dono: "agente",          label: "Arquivar na lixeira (restauravel)" },
+  DEVOLVER:              { ordem: 3, dono: "solicitante",     label: "Devolver ao solicitante" },
+  ROTEAR:                { ordem: 4, dono: "aprovador certo", label: "Rotear para a alcada correta" },
+  CORRIGIR_E_ENCAMINHAR: { ordem: 5, dono: "agente",          label: "Corrigir e encaminhar" },
+  RECOMENDAR_ESTORNO:    { ordem: 6, dono: "contas a pagar",  label: "Recomendar estorno (Art. 11)" },
+  ENCAMINHAR:            { ordem: 7, dono: "aprovador",       label: "Encaminhar ao aprovador" },
 } as const;
 export type AcaoAgente = keyof typeof ACOES_AGENTE;
 
@@ -79,8 +82,52 @@ const fmtCnpj = (c: string) => c && c.length === 14
   ? `${c.slice(0,2)}.${c.slice(2,5)}.${c.slice(5,8)}/${c.slice(8,12)}-${c.slice(12)}` : c;
 const fmtData = (ts: number) => new Date(ts).toISOString().slice(0, 10).split("-").reverse().join("/");
 
+// Texto ao solicitante para os sinais que nascem no motor. Sem isso a devolucao
+// sai sem dizer o que a pessoa precisa fazer.
+const AO_SOLICITANTE: Record<string, string> = {
+  APROVADOR_INATIVO: "O aprovador deste pedido nao age ha muito tempo. Indique o gestor atual da sua area.",
+  SEM_BENEFICIARIO: "O pedido nao identifica quem recebe. Informe fornecedor, CNPJ ou CPF, e anexe a nota fiscal.",
+  VALOR_NO_TITULO: "O valor foi digitado no lugar do nome do fornecedor. Corrija o campo do favorecido; o valor tem campo proprio.",
+  DOCUMENTO_VENCIDO: "O documento esta vencido. Atualize o boleto ou renegocie o vencimento com o fornecedor (Art. 8).",
+  DUPLICIDADE_JA_APROVADA: "Existe um pedido ja aprovado com o mesmo beneficiario, valor e vencimento. Confirme se nao e pagamento em duplicidade.",
+  DUPLICIDADE_NA_FILA: "Ha outro pedido identico parado ao mesmo tempo. Confirme qual vale.",
+  CNPJ_INVALIDO: "O CNPJ informado reprova no digito verificador. Confira na nota fiscal.",
+  CPF_INVALIDO: "O CPF informado reprova no digito verificador.",
+  NOME_DIVERGE_DO_CNPJ: "O nome do favorecido nao bate com o historico deste CNPJ. Confirme o cadastro com Compras/Supply.",
+  FILA_ZUMBI: "Este pedido esta parado ha muito tempo. Confirme se ainda e devido.",
+};
+
+// O agente le DUAS fontes: as violacoes de politica (policy.ts) e os sinais do
+// motor (engine.ts). Antes so lia a primeira, entao regras como FILA_ZUMBI e
+// APROVADOR_INATIVO nunca chegavam na decisao. O registro (regras.ts) governa
+// as duas: sinal desligado nao entra, e a severidade vem de la.
+function unificarAchados(r: any, pol: any) {
+  const jaTem = new Set(pol.violacoes.map((v: any) => v.regra));
+  const doMotor = (r.findings ?? [])
+    .filter((f: any) => !jaTem.has(f.code))
+    .map((f: any) => ({
+      artigo: REGRAS[f.code]?.base ?? "higiene de base",
+      regra: f.code,
+      texto: f.msg,
+      gravidade: f.severity ?? 1,
+      severidade: f.severidade ?? severidadeDe(f.code),
+      foraDaJanela: Boolean(f.foraDaJanela),
+      janelaDias: f.janelaDias ?? janelaDe(f.code),
+      corrigivel: false,
+      aoSolicitante: AO_SOLICITANTE[f.code] ?? f.msg,
+    }));
+  // As violacoes de politica tambem passam pelo registro.
+  const daPolitica = pol.violacoes.map((v: any) => ({
+    ...v,
+    severidade: v.severidade ?? severidadeDe(v.regra),
+    foraDaJanela: Boolean(v.foraDaJanela),
+  }));
+  return [...daPolitica, ...doMotor];
+}
+
 export function processar(r: any, ctx: any) {
   const pol = avaliarPolitica(r, ctx);
+  pol.violacoes = unificarAchados(r, pol).filter((v: any) => REGRAS[v.regra]?.ativo !== false);
   const graves = pol.violacoes.filter(v => v.gravidade === 3);
   const medias = pol.violacoes.filter(v => v.gravidade === 2);
   const regras = new Set(pol.violacoes.map(v => v.regra));
@@ -88,34 +135,59 @@ export function processar(r: any, ctx: any) {
   let acao: AcaoAgente;
   let porque: string;
 
-  // 1. O que nunca deveria virar pagamento sai da fila, sem consumir aprovador.
+  const sev = (c: string) => pol.violacoes.find((v: any) => v.regra === c);
+  const temTrava = pol.violacoes.some((v: any) => severidadeDe(v.regra) === "TRAVA" && !v.foraDaJanela);
+  // Sinais cuja janela estourou: pelo handoff eles deixam de travar e viram
+  // devolucao. Guardamos separado porque a mensagem ao solicitante muda.
+  const foraDaJanela = pol.violacoes.filter((v: any) => v.foraDaJanela);
+
+  // 1. O que nunca deveria virar pagamento sai da fila sem consumir aprovador.
   if (regras.has("REGISTRO_DE_TESTE")) {
     acao = "ENCERRAR"; porque = "Registro de teste. Nao ha obrigacao financeira a liquidar.";
   } else if (regras.has("DESPESA_PRE_APROVADA")) {
     acao = "ENCERRAR"; porque = "Anexo II: despesa ja pre-aprovada por contrato ou orcamento, nao passa por este fluxo.";
 
-  // 2. Intercompany NAO e encerrado pelo agente. O playbook fiscal diz que a
-  //    operacao roda por tipo 51 / codigo 010 sem gerar titulo, mas quem confirma
-  //    que e mesmo intercompany e a Controladoria. Decisao do Bruno em 18/09/2026.
+  // 2. COLISAO ENTRE DUAS REGRAS DO HANDOFF, resolvida a favor do compliance.
+  //    A regra 1 manda TODA fila zumbi para a lixeira, sem corte. A regra 14 diz
+  //    que autoaprovacao e TRAVA "sem excecao" e que nem o proprio aprovador
+  //    derruba. Os 7 casos de autoaprovacao sao todos antigos: pela regra 1 eles
+  //    sumiriam na lixeira e ninguem veria a quebra de segregacao de funcao.
+  //    Aqui o compliance ganha. Se o financeiro preferir o contrario, e trocar
+  //    a ordem destes dois blocos.
+  } else if (regras.has("AUTOAPROVACAO")) {
+    acao = "ROTEAR";
+    porque = "Solicitante e aprovador sao a mesma pessoa. O Art. 4 chama segregacao de funcoes de regra inviolavel e o Art. 7 diz que em nenhuma hipotese o solicitante pode ser o proprio aprovador. Nao vai para a lixeira mesmo estando parado: a quebra tem que ser vista.";
+
+  // 3. Regra 1: fila zumbi sai inteira da base de trabalho, para uma lixeira
+  //    restauravel. Sem corte de dias, sem aprovacao em lote, porque e
+  //    reversivel. O GoService nao e tocado nesta acao.
+  } else if (regras.has("FILA_ZUMBI")) {
+    acao = "ARQUIVAR_NA_LIXEIRA";
+    porque = `Parado ha ${Math.round(pol.idadeDias ?? 0)} dias. Sai da base de trabalho para a lixeira, de onde pode ser restaurado a qualquer momento.`;
+
+  // 3. Intercompany nao e encerrado pelo agente: quem confirma e a Controladoria.
   } else if (regras.has("INTERCOMPANY")) {
     acao = "ENCAMINHAR";
     porque = "Operacao entre empresas do grupo (Anexo I). Nao encerro sozinho: a Controladoria confirma se segue por intercompany, que pelo playbook fiscal nao gera titulo a pagar.";
 
-  // 3. Art. 11: parado alem de 120 dias, a politica manda recomendar estorno.
-  } else if (regras.has("ESTORNO_RECOMENDADO")) {
-    acao = "RECOMENDAR_ESTORNO"; porque = `Art. 11: parado ha ${Math.round(pol.idadeDias ?? 0)} dias, acima dos ${ESTORNO_RECOMENDADO_DIAS} previstos.`;
+  // 4. Segregacao de funcao e alcada: o agente troca QUEM decide (regras 5, 7 e 14).
+  } else if (regras.has("ALCADA_INSUFICIENTE") || regras.has("APROVADOR_SEM_ALCADA")) {
+    acao = "ROTEAR";
+    porque = sev("ALCADA_INSUFICIENTE")?.texto ?? sev("APROVADOR_SEM_ALCADA")?.texto ?? "Aprovador sem alcada para o valor.";
 
-  // 3. Violacao grave que o agente NAO consegue resolver: volta ao solicitante.
-  //    Playbook fiscal, POP 02: "recusa so quando nao ha solucao possivel";
-  //    havendo ajuste possivel, devolve para ajuste em vez de reprovar.
-  } else if (graves.some(v => !v.corrigivel)) {
-    acao = "DEVOLVER"; porque = graves.find(v => !v.corrigivel)!.texto;
+  // 5. Trava que o agente nao resolve: volta ao solicitante.
+  } else if (temTrava && graves.some((v: any) => !v.corrigivel)) {
+    acao = "DEVOLVER"; porque = graves.find((v: any) => !v.corrigivel)!.texto;
 
-  // 4. So falta cadastro que o agente corrige, ou alcada que ele reroteia.
-  } else if (pol.correcoes.length || graves.some(v => v.corrigivel)) {
-    acao = "CORRIGIR_E_ENCAMINHAR"; porque = "Pendencias resolvidas pelo agente; o pedido segue instruido.";
+  // 6. Sinal cuja janela estourou: nao trava, devolve (regras 7 e 8).
+  } else if (foraDaJanela.length) {
+    acao = "DEVOLVER";
+    porque = `${foraDaJanela[0].texto} Passou da janela de ${foraDaJanela[0].janelaDias ?? 15} dias, entao volta ao solicitante em vez de travar.`;
 
-  // 5. Pendencia media: nao trava, mas o aprovador precisa ver.
+  // 7. So falta cadastro que o agente corrige.
+  } else if (pol.correcoes.length) {
+    acao = "CORRIGIR_E_ENCAMINHAR"; porque = "Pendencias de cadastro resolvidas pelo agente; o pedido segue instruido.";
+
   } else {
     acao = "ENCAMINHAR";
     porque = medias.length ? medias[0].texto : "Sem violacao de politica. Pronto para decisao da alcada.";
@@ -269,7 +341,11 @@ export function processarFila(pendentes: any[], ctx: any) {
     for (const a of x.artigosCitados) porArtigo[a] = (porArtigo[a] ?? 0) + 1;
     for (const v of x.violacoes) porRegra[v.regra] = (porRegra[v.regra] ?? 0) + 1;
   }
-  const semAprovador = res.filter(x => x.acao === "ENCERRAR" || x.acao === "DEVOLVER" || x.acao === "RECOMENDAR_ESTORNO").length;
+  // "Nao consome aprovador" = tudo que sai da fila ou volta para outra pessoa
+  // antes de chegar na mesa de quem assina. A lixeira e o roteamento por alcada
+  // entraram depois da revisao de 18/09 e faltavam nesta conta.
+  const SEM_APROVADOR = new Set(["ENCERRAR", "ARQUIVAR_NA_LIXEIRA", "DEVOLVER", "ROTEAR", "RECOMENDAR_ESTORNO"]);
+  const semAprovador = res.filter(x => SEM_APROVADOR.has(x.acao)).length;
   return {
     itens: res,
     total: res.length,
@@ -346,6 +422,32 @@ export function acoesDoItem(x: any) {
       destinatario: x.mensagemAoSolicitante.para, assunto: x.mensagemAoSolicitante.assunto,
       payload: x.mensagemAoSolicitante, baseLegal: "Art. 11" });
   }
+  // Regra 1: a lixeira e do proprio agente, nao toca o GoService. Por isso a
+  // acao existe mas nao vira chamada ao GLPI: quem a consome e o livro-razao.
+  if (x.acao === "ARQUIVAR_NA_LIXEIRA") {
+    out.push({ tipo: "MOVER_PARA_LIXEIRA", pedidoId: x.id, destinatario: "lixeira do Goworker",
+      assunto: `Arquivar #${x.id} na lixeira`,
+      payload: { motivo: x.porque, diasSemMovimento: x.idadeDias, restauravel: true },
+      baseLegal: "Handoff 18/09/2026, regra 1" });
+  }
+  // Aditivo da regra 1: a lixeira resolve a fila, nao o titulo no ERP.
+  if (x.violacoes.some((v: any) => v.regra === "ESTORNO_RECOMENDADO") && x.acao !== "RECOMENDAR_ESTORNO") {
+    out.push({ tipo: "RECOMENDAR_ESTORNO", pedidoId: x.id, destinatario: "contas a pagar",
+      assunto: `Recomendar estorno do titulo do pedido #${x.id}`,
+      payload: { corpo: x.mensagemAoSolicitante?.corpo ?? null,
+        motivo: `Parado ha ${x.idadeDias} dias, acima dos 120 do Art. 11.` },
+      baseLegal: "CAP Art. 11" });
+  }
+  // Regra 15: o sinal acusa o sistema, nao quem preencheu. A demanda de produto
+  // e parte da regra, nao um extra.
+  if (x.violacoes.some((v: any) => v.regra === "VALOR_NO_TITULO")) {
+    out.push({ tipo: "ABRIR_DEMANDA_DE_PRODUTO", pedidoId: x.id, destinatario: "produto / TI",
+      assunto: "Expor valor, vencimento, NF e centro de custo em get_payment_request",
+      payload: { origem: `pedido #${x.id}`,
+        justificativa: "As pessoas escrevem o valor no titulo porque o campo nao era legivel pela API." },
+      baseLegal: "Handoff 18/09/2026, regra 15" });
+  }
+
   if (x.acao === "ENCERRAR") {
     // O corpo precisa dizer POR QUE, com a base normativa. Um encerramento sem
     // motivo registrado nao serve de trilha de auditoria para ninguem.
@@ -366,6 +468,20 @@ export function acoesDoItem(x: any) {
   for (const c of x.correcoes) {
     out.push({ tipo: "CORRIGIR_CADASTRO", pedidoId: x.id, destinatario: "GoService/ERP",
       assunto: `Corrigir ${c.campo} do pedido #${x.id}`, payload: c, baseLegal: c.artigo });
+  }
+  // Regra 14: "registrar_em_compliance()". A quebra de segregacao nao pode ficar
+  // so na decisao do agente; ela e um evento de compliance por si.
+  if (x.violacoes.some((v: any) => v.regra === "AUTOAPROVACAO")) {
+    out.push({ tipo: "NOTIFICAR_PENALIDADE", pedidoId: x.id, destinatario: "Compliance e Diretoria Financeira",
+      assunto: `Quebra de segregacao de funcao no pedido #${x.id}`,
+      payload: { corpo: [
+        `O pedido #${x.id} tem a mesma pessoa como solicitante e como aprovador.`,
+        ``,
+        `A Politica Corporativa de Pagamentos, Art. 4, trata segregacao de funcoes como regra inviolavel, e o Art. 7 diz que em nenhuma hipotese o solicitante da despesa podera ser o proprio aprovador.`,
+        ``,
+        `O pedido foi roteado para outro aprovador e este registro fica na trilha de compliance.`,
+      ].join("\n") },
+      baseLegal: "CAP Art. 4 e 7" });
   }
   if (x.roteamento.precisaRerotear) {
     out.push({ tipo: "ROTEAR_PARA_ALCADA", pedidoId: x.id, destinatario: "GoService",

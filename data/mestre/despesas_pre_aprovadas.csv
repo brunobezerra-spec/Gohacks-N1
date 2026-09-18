@@ -1,0 +1,12 @@
+categoria_despesa,descricao,fonte
+CONTAS_DE_CONSUMO,"Energia, Agua, Internet, Telefonia, Seguranca",CAP Anexo II
+LOCACAO_IMOVEIS_EQUIPAMENTOS,Alugueis de imoveis e equipamentos (contratual),CAP Anexo II
+LICENCIAMENTO_CONTRATUAL,Garantia minima mediante contrato,CAP Anexo II
+CONTRATO_RECORRENTE,Mensalidades recorrentes / servico prestado,CAP Anexo II
+DP_ASSISTENCIA_MEDICA,Assistencia Medica e Odontologica,CAP Anexo II
+DP_BENEFICIOS,"Vale Alimentacao, Transporte e Flexiveis",CAP Anexo II
+DP_ENDOMARKETING,Endomarketing - Premiacao,CAP Anexo II
+DP_FOLHA,Folha de pagamento,CAP Anexo II
+DP_RESCISAO,Rescisao,CAP Anexo II
+DP_FERIAS,Ferias,CAP Anexo II
+DP_SERVICOS_PJ,Servicos Prestados (PJs),CAP Anexo II

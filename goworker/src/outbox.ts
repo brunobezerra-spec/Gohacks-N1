@@ -14,8 +14,12 @@ export const TIPOS_PERMITIDOS = [
   "RECOMENDAR_ESTORNO",        // Art. 11: parado ha mais de 120 dias
   "CORRIGIR_CADASTRO",         // patch de campo, com origem e confianca
   "ROTEAR_PARA_ALCADA",        // Art. 7: mandar para quem tem alcada
-  "ENCERRAR_PEDIDO",           // teste, despesa pre-aprovada, intercompany
+  "ENCERRAR_PEDIDO",           // teste, despesa pre-aprovada
   "PROGRAMAR_CAP",             // Art. 8 e 9: lote de contas a pagar
+  // --- entraram com a revisao do handoff de 18/09/2026
+  "MOVER_PARA_LIXEIRA",        // regra 1: fila zumbi sai da base, restauravel
+  "ABRIR_CHAMADO_DE_HIGIENE",  // regra 4: UM chamado com a lista, nao um por pedido
+  "ABRIR_DEMANDA_DE_PRODUTO",  // regra 15: o campo de valor precisa existir
 ] as const;
 export type TipoAcao = typeof TIPOS_PERMITIDOS[number];
 

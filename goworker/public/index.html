@@ -89,6 +89,16 @@ footer{padding:18px 24px 40px;color:var(--faint);font-size:12px;max-width:1400px
   <div class="grid" id="agKpis"></div>
   <div class="panel" id="agAcoes"></div>
 
+  <h2>Lixeira — tirados da base de trabalho, nada apagado</h2>
+  <div class="note" id="lxNota"></div>
+  <div style="margin:0 0 10px">
+    <input id="lxBusca" placeholder="buscar por pedido, chamado, fornecedor, CNPJ, aprovador ou solicitante"
+      style="width:min(520px,100%);background:var(--panel);border:1px solid var(--line);color:var(--fg);
+             padding:8px 12px;border-radius:7px;font-family:inherit;font-size:13px">
+    <button class="tab" onclick="buscarLixeira()">buscar</button>
+  </div>
+  <div class="panel" id="lixeira"></div>
+
   <h2>Outbox — as ações que ele emitiu</h2>
   <div class="panel" id="agOutbox"></div>
   <div class="note" id="agTrava"></div>
@@ -211,6 +221,9 @@ async function boot(){
     <div class="kpi"><div class="n">${fmt(A.horasEconomizadas)}h</div>
       <div class="l">trabalho humano substituído</div>
       <div class="s">premissa editável, não medição</div></div>
+    <div class="kpi"><div class="n">${fmt(S.lixeira?.total)}</div>
+      <div class="l">na lixeira</div>
+      <div class="s">restauráveis · ${fmt(S.lixeira?.restaurados)} já restaurados</div></div>
     <div class="kpi"><div class="n">${fmt(A.lotesCAP?.pedidosProgramaveis)}</div>
       <div class="l">prontos para contas a pagar</div>
       <div class="s">${A.lotesCAP?.lotes?.length||0} lote(s) montado(s)</div></div>`;
@@ -224,12 +237,14 @@ async function boot(){
       <td><div class="bar"><i style="width:${100*v/totAg}%;background:${COR[k]||'var(--accent)'}"></i></div></td>
     </tr>`).join('')}</tbody></table>`;
 
+  await buscarLixeira();
+
   const ob = await (await fetch('/api/agente/outbox?limite=12')).json();
   const cnt = {};
   for (const a of (ob.acoes||[])) cnt[a.tipo] = (cnt[a.tipo]||0)+1;
   $('#agOutbox').innerHTML = `<table>
     <thead><tr><th>Tipo</th><th>Destinatário</th><th>Assunto</th><th>Base legal</th><th>Status</th></tr></thead>
-    <tbody>${(ob.acoes||[]).slice(0,10).map(a=>`<tr onclick="verParecer(${a.pedido_id})">
+    <tbody>${(ob.acoes||[]).slice(0,10).map(a=>`<tr ${a.pedido_id?`onclick="verParecer(${a.pedido_id})"`:'style="cursor:default"'}>
       <td><code>${a.tipo}</code></td><td>${esc((a.destinatario||'—').slice(0,26))}</td>
       <td class="muted">${esc((a.assunto||'').slice(0,54))}</td>
       <td class="muted">${esc(a.base_legal||'—')}</td>
@@ -311,6 +326,37 @@ async function load(){
 
 function fila(a){ window.open('/api/queue?aprovador='+encodeURIComponent(a)+'&limite=200','_blank'); }
 function verAgente(acao){ window.open('/api/agente/fila?acao='+acao+'&limite=300','_blank'); }
+
+async function buscarLixeira(){
+  const q = ($('#lxBusca')?.value || '').trim();
+  const L = await (await fetch('/api/lixeira?limite=25' + (q ? '&busca=' + encodeURIComponent(q) : ''))).json();
+  $('#lxNota').innerHTML = `<b>${fmt(L.naLixeira)} pedidos na lixeira</b>, ${fmt(L.restaurados)} já restaurados.
+    Retenção: ${esc(L.retencao)}. Cada item guarda o snapshot completo de como estava quando saiu.
+    Restaurar devolve à base de trabalho e o agente nunca mais arquiva aquele pedido sozinho.`;
+  $('#lixeira').innerHTML = `<table>
+    <thead><tr><th>Pedido</th><th>Fornecedor</th><th class="num">Valor</th>
+      <th class="num">Parado</th><th>Situação</th><th></th></tr></thead>
+    <tbody>${(L.itens||[]).map(x=>{
+      const p = x.snapshot?.pedido || {};
+      return `<tr>
+        <td>#${x.pedido_id}${p.ticketId?` <span class="muted">· chamado ${p.ticketId}</span>`:''}</td>
+        <td>${esc((p.fornecedor||p.titulo||'—').slice(0,38))}</td>
+        <td class="num muted">${p.valor?('R$ '+Number(p.valor).toLocaleString('pt-BR',{minimumFractionDigits:2})):'—'}</td>
+        <td class="num">${x.dias_sem_movimento}d</td>
+        <td>${x.restaurado_em
+          ? `<span class="sev1">restaurado por ${esc(x.restaurado_por||'?')}</span>`
+          : '<span class="muted">na lixeira</span>'}</td>
+        <td>${x.restaurado_em?'':`<button class="x" onclick="restaurar(${x.pedido_id})">restaurar</button>`}</td>
+      </tr>`;}).join('') || '<tr><td colspan="6" class="muted">nada encontrado</td></tr>'}
+    </tbody></table>`;
+}
+
+async function restaurar(id){
+  const r = await (await fetch('/api/lixeira/restaurar',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[id]})})).json();
+  await buscarLixeira();
+  alert(r.restaurados ? `Pedido #${id} restaurado. ${r.aviso}` : 'Nada a restaurar.');
+}
 
 async function verParecer(id){
   if (!id) return;

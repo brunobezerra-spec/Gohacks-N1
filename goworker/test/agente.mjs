@@ -24,7 +24,7 @@ ok('run 200', r.status===200, JSON.stringify(b).slice(0,200));
 ok('agente decidiu a fila inteira',
    Object.values(b.agente.porAcao).reduce((a,c)=>a+c,0)===b.totalPending,
    JSON.stringify(b.agente?.porAcao));
-ok('maioria nao chega ao aprovador', b.agente.pctNaoConsomemAprovador>40, b.agente.pctNaoConsomemAprovador);
+ok('maioria nao chega ao aprovador', b.agente.pctNaoConsomemAprovador>60, b.agente.pctNaoConsomemAprovador);
 ok('emitiu acoes concretas', b.agente.acoesEmitidas>300, b.agente.acoesEmitidas);
 ok('contabiliza horas com premissa declarada',
    b.agente.horasEconomizadas>0 && b.agente.premissasHH.triagem_documental>0, b.agente.horasEconomizadas);
@@ -51,7 +51,7 @@ ok('parecer tem destinatario nomeado', !!par.mensagemAoSolicitante.para);
 console.log('\n== 4. outbox: lista FECHADA de acoes ==');
 const ob=await j(await call('/api/agente/outbox?limite=300'));
 ok('outbox populada', ob.acoes.length>0, ob.acoes.length);
-ok('7 tipos permitidos', ob.tiposPermitidos.length===7, ob.tiposPermitidos.length);
+ok('10 tipos permitidos', ob.tiposPermitidos.length===10, ob.tiposPermitidos.length);
 ok('toda acao esta na lista permitida', ob.acoes.every(a=>ob.tiposPermitidos.includes(a.tipo)),
    [...new Set(ob.acoes.map(a=>a.tipo))].filter(t=>!ob.tiposPermitidos.includes(t)).join(','));
 // A invariante e sobre o ATO, nao sobre a palavra: ROTEAR_PARA_ALCADA fala de
@@ -130,7 +130,7 @@ ok('aviso de que sao premissas', /PREMISSAS|premissas/i.test(hh.aviso));
 console.log('\n== 11. ferramentas MCP do agente ==');
 let m=await rpc('tools/list',{});
 const nomes=m.result.tools.map(t=>t.name);
-ok('19 ferramentas', nomes.length===19, nomes.length);
+ok('22 ferramentas', nomes.length===22, nomes.length);
 for (const t of ['goworker_agente_resumo','goworker_agente_fila','goworker_agente_parecer',
                  'goworker_outbox','goworker_despachar','goworker_lotes_cap','goworker_premissas_hh'])
   ok('expoe '+t, nomes.includes(t));
@@ -229,7 +229,7 @@ for (const [m,c,esperado] of [
   ['POST','/ITILSolution/',true],
   ['PUT','/TicketValidation/123',true],
   ['PUT','/Ticket/23119',false],          // mudar status de chamado nao e ato do agente
-  ['POST','/Ticket/',false],
+  ['POST','/Ticket/',true],       // regra 4: UM chamado de higiene
   ['DELETE','/Ticket/1',false],
   ['PUT','/TicketValidation/',false],
   ['POST','/ITILSolution',false],
@@ -250,11 +250,10 @@ console.log('\n== 14. matriz x filial ==');
   const all = L.engine.enrich(JSON.parse((await import('node:fs')).readFileSync('/Users/bruno/orca/projects/Gohacks-N1/data/approvals_full.json','utf8')));
   const an = L.engine.analyze(all,{now:Date.parse('2026-09-18T15:10:00Z')});
   const sm = L.engine.summarize(an);
-  ok('filial nova de empresa conhecida vira ESTABELECIMENTO_NOVO, nao BENEFICIARIO_NOVO',
-     (sm.byCode.ESTABELECIMENTO_NOVO||0)>0, sm.byCode.ESTABELECIMENTO_NOVO);
-  ok('ESTABELECIMENTO_NOVO e severidade 1, nao trava o pedido',
-     an.pending.filter(r=>r.findings.some(f=>f.code==='ESTABELECIMENTO_NOVO'))
-       .every(r=>r.findings.find(f=>f.code==='ESTABELECIMENTO_NOVO').severity===1));
+  // Os tres sinais de beneficiario e o de estabelecimento foram DESLIGADOS na
+  // revisao de 18/09/2026 ("remover da lista"). O registro tem que calar todos.
+  for (const s of ['BENEFICIARIO_NOVO','BENEFICIARIO_ALTA_RECUSA','BENEFICIARIO_SO_RECUSADO','ESTABELECIMENTO_NOVO'])
+    ok('sinal desligado nao aparece: '+s, !(sm.byCode[s]>0), sm.byCode[s]);
   ok('conflito de grafia continua por raiz+ordem, sem misturar filiais',
      L.engine.auditRetroativo(all).conflitosDeGrafia.every(c=>
        new Set(c.grafias.map(g=>g.cnpj.slice(0,12))).size===1));

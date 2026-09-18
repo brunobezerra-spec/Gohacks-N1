@@ -1,12 +1,22 @@
 // Sobe o worker contra um SQLite real e exercita todas as rotas + MCP.
 import { DatabaseSync } from 'node:sqlite';
 import worker from '/tmp/bundle.js';
-import * as engine from '/Users/bruno/orca/projects/Gohacks-N1/goworker/src/engine.ts';
+// pelo bundle, nao pelos .ts soltos: o engine importa './regras' sem extensao,
+// que o Node nao resolve mas o bundler sim.
+import * as L from '/tmp/lib.js';
 import { expandSnapshot } from '/Users/bruno/orca/projects/Gohacks-N1/goworker/src/snapshot.ts';
+const engine = L.engine;
 
 // Expectativas calculadas na hora, com o mesmo relogio do servidor. Assim o teste
 // valida a LIGACAO servidor<->motor sem envelhecer toda vez que uma regra muda.
-const EXP = engine.summarize(engine.analyze(engine.enrich(expandSnapshot())));
+const ANALISE = engine.analyze(engine.enrich(expandSnapshot()));
+const EXP = engine.summarize(ANALISE);
+// A lixeira sai da base de trabalho (regra 1), entao as contagens da fila sao
+// sobre o que NAO foi arquivado. Calculamos o mesmo recorte aqui.
+const AG = L.agent.processarFila(ANALISE.pending, L.agent.montarContexto(engine.enrich(expandSnapshot()), {}));
+const NA_LIXEIRA = new Set(AG.itens.filter(x => x.acao === 'ARQUIVAR_NA_LIXEIRA').map(x => x.id));
+const TRABALHO = ANALISE.pending.filter(r => !NA_LIXEIRA.has(r.id));
+const contaTrabalho = (f) => TRABALHO.filter(f).length;
 const EXP_RETRO = engine.auditRetroativo(engine.enrich(expandSnapshot()));
 console.log('expectativa do motor:', JSON.stringify(EXP.byAction));
 
@@ -60,13 +70,13 @@ ok('registros = snapshot', b.totalRecords === expandSnapshot().length, b.totalRe
 
 console.log('\n== 4. queue com filtros ==');
 r = await call('/api/queue?acao=BLOQUEAR&limite=500'); const bloq = await j(r);
-ok('BLOQUEAR = motor', bloq.length === EXP.byAction.BLOQUEAR, `${bloq.length} vs ${EXP.byAction.BLOQUEAR}`);
+ok('BLOQUEAR = base de trabalho', bloq.length === contaTrabalho(r => r.action === 'BLOQUEAR'), `${bloq.length} vs ${contaTrabalho(r => r.action === 'BLOQUEAR')}`);
 ok('todos com acao BLOQUEAR', bloq.every(x => x.action === 'BLOQUEAR'));
 ok('ordenado por risco desc', bloq[0].risk >= bloq[bloq.length-1].risk);
 r = await call('/api/queue?sinal=APROVADOR_INATIVO&limite=200'); const inat = await j(r);
-ok('filtro por sinal = motor', inat.length === EXP.byCode.APROVADOR_INATIVO, `${inat.length} vs ${EXP.byCode.APROVADOR_INATIVO}`);
+ok('filtro por sinal = base de trabalho', inat.length === contaTrabalho(r => r.findings.some(f => f.code === 'APROVADOR_INATIVO')), inat.length);
 r = await call('/api/queue?aprovador=joao.conde&limite=500'); const jc = await j(r);
-ok('filtro por aprovador', jc.length === 184 && jc.every(x=>x.approver==='joao.conde'), jc.length);
+ok('filtro por aprovador', jc.length === contaTrabalho(r => r.approver === 'joao.conde') && jc.every(x=>x.approver==='joao.conde'), jc.length);
 
 console.log('\n== 5. dossie ==');
 const alvo = bloq[0].approval_id;
@@ -94,9 +104,13 @@ const rpc = async (method, params) => j(await call('/_mcp', { method:'POST',
 let m = await rpc('initialize', { protocolVersion:'2025-06-18' });
 ok('initialize', m.result?.protocolVersion === '2025-06-18', JSON.stringify(m).slice(0,200));
 m = await rpc('tools/list', {});
-ok('19 ferramentas', m.result?.tools?.length === 19, m.result?.tools?.length);
+ok('22 ferramentas', m.result?.tools?.length === 22, m.result?.tools?.length);
 ok('nomes corretos', m.result.tools.map(t=>t.name).sort().join(',') ===
-  'goworker_agente_fila,goworker_agente_parecer,goworker_agente_resumo,goworker_auditoria_retroativa,goworker_despachar,goworker_diagnostico_de_perfil,goworker_dossie,goworker_executar,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_lotes_cap,goworker_motivos_de_recusa,goworker_outbox,goworker_premissas_hh,goworker_registrar_decisao,goworker_resumo,goworker_status_execucao,goworker_tipos_de_alto_risco',
+  ['goworker_agente_fila','goworker_agente_parecer','goworker_agente_resumo','goworker_auditoria_retroativa',
+   'goworker_despachar','goworker_diagnostico_de_perfil','goworker_dossie','goworker_executar','goworker_fila',
+   'goworker_filas_orfas','goworker_gargalos','goworker_lixeira','goworker_lotes_cap','goworker_motivos_de_recusa',
+   'goworker_outbox','goworker_premissas_hh','goworker_regras','goworker_registrar_decisao','goworker_restaurar_da_lixeira',
+   'goworker_resumo','goworker_status_execucao','goworker_tipos_de_alto_risco'].sort().join(','),
   m.result?.tools?.map(t=>t.name).join(','));
 m = await rpc('tools/call', { name:'goworker_auditoria_retroativa', arguments:{} });
 { const A = m.result?.structuredContent;
@@ -110,7 +124,7 @@ ok('resumo via MCP', m.result?.structuredContent?.totalPending === EXP.totalPend
 m = await rpc('tools/call', { name:'goworker_filas_orfas', arguments:{} });
 ok('filas orfas via MCP', JSON.parse(m.result.content[0].text).length === EXP.orphanApprovers);
 m = await rpc('tools/call', { name:'goworker_fila', arguments:{ acao:'REDIRECIONAR', limite:100 } });
-ok('fila filtrada via MCP', JSON.parse(m.result.content[0].text).length === EXP.byAction.REDIRECIONAR);
+ok('fila filtrada via MCP', JSON.parse(m.result.content[0].text).length === contaTrabalho(r => r.action === 'REDIRECIONAR'));
 m = await rpc('tools/call', { name:'goworker_dossie', arguments:{ id: alvo } });
 ok('dossie via MCP', !!m.result?.structuredContent?.recomendacao);
 m = await rpc('tools/call', { name:'goworker_registrar_decisao', arguments:{ id: alvo, decisao:'adiado' } });
@@ -161,7 +175,7 @@ console.log('\n== 8. SEGURANCA: o agente escreve, mas nao decide ==');
 console.log('\n== 9. re-run e idempotencia ==');
 r = await call('/api/run', { method:'POST' }); b = await j(r);
 ok('segundo run 200', r.status === 200);
-ok('triagem nao duplica', (await (await call('/api/queue?acao=BLOQUEAR&limite=500')).json()).length === EXP.byAction.BLOQUEAR);
+ok('triagem nao duplica', (await (await call('/api/queue?acao=BLOQUEAR&limite=500')).json()).length === contaTrabalho(r => r.action === 'BLOQUEAR'));
 r = await call('/api/audit'); b = await j(r);
 ok('auditoria acumula', b.length >= 4, b.length);
 
@@ -197,10 +211,12 @@ console.log('\n== 10b. regressoes apontadas pelo red team ==');
   const pctec = acha(/PCTEC/i);
   ok('fornecedor com AUTOMACAO no nome nao vira ARQUIVAR', !pctec || pctec.action !== 'ARQUIVAR', pctec?.action);
   const auto = await j(await call('/api/queue?sinal=AUTOAPROVACAO&limite=100'));
-  ok('autoaprovacao detectada e bloqueada', auto.length === EXP.byCode.AUTOAPROVACAO && auto.every(x => x.action === 'BLOQUEAR'),
-     `${auto.length} vs ${EXP.byCode.AUTOAPROVACAO}`);
+  // AUTOAPROVACAO agora roteia (regra 14: "ROTEAR_PARA_ALCADA(alguem que nao solicitou)")
+  const autoAg = await j(await call('/api/agente/fila?acao=ROTEAR&limite=500'));
+  ok('autoaprovacao roteia para outra pessoa',
+     autoAg.some(x => /segregacao|solicitante e aprovador/i.test(x.porque || '')), autoAg.length);
   const div = await j(await call('/api/queue?sinal=NOME_DIVERGE&limite=100'));
-  ok('divergencia nome-CNPJ detectada', div.length === EXP.byCode.NOME_DIVERGE_DO_CNPJ, `${div.length} vs ${EXP.byCode.NOME_DIVERGE_DO_CNPJ}`);
+  ok('divergencia nome-CNPJ detectada', div.length === contaTrabalho(r => r.findings.some(f => f.code === 'NOME_DIVERGE_DO_CNPJ')), div.length);
   const lib = await j(await call('/api/queue?acao=LIBERAR&limite=500'));
   ok('nenhum LIBERAR carrega achado de severidade 2 ou 3',
      lib.every(x => (x.findings || []).every(f => f.severity < 2)),
@@ -231,9 +247,9 @@ console.log('\n== 11. migracao de schema antigo (env.DB sobrevive a updateApp) =
   ok('run sobre base com schema antigo', rr.status === 200, JSON.stringify(bb).slice(0, 200));
   ok('triagem regravada no formato novo', bb.totalPending === EXP.totalPending, bb.totalPending);
   rr = await c2('/api/health'); bb = await j(rr);
-  ok('schema marcado na versao atual', bb.schemaVersion === 7, bb.schemaVersion);
+  ok('schema marcado na versao atual', bb.schemaVersion === 8, bb.schemaVersion);
   const q = await j(await c2('/api/queue?acao=BLOQUEAR&limite=500'));
-  ok('linha velha some apos migracao', q.every(x => x.action !== 'VELHO') && q.length === EXP.byAction.BLOQUEAR, q.length);
+  ok('linha velha some apos migracao', q.every(x => x.action !== 'VELHO') && q.length === contaTrabalho(r => r.action === 'BLOQUEAR'), q.length);
 }
 
 console.log(`\n${'='.repeat(46)}\nPASS ${pass}  FAIL ${fail}\n${'='.repeat(46)}`);

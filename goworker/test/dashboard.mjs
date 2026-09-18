@@ -17,8 +17,10 @@ const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://t.local/
 const erros = [];
 dom.virtualConsole.on('jsdomError', e => erros.push('jsdomError: ' + e.message));
 dom.window.addEventListener('error', e => erros.push('window.error: ' + e.message));
-dom.window.fetch = async (u) => { const r = await api(String(u).replace('https://t.local','')); 
-  return { json: async () => JSON.parse(await r.text()), status: r.status }; };
+dom.window.fetch = async (u, o = {}) => {
+  const r = await api(String(u).replace('https://t.local',''), o);
+  return { json: async () => JSON.parse(await r.text()), status: r.status };
+};
 dom.window.HTMLDialogElement.prototype.showModal = function(){ this.setAttribute('open',''); };
 dom.window.HTMLDialogElement.prototype.close = function(){ this.removeAttribute('open'); };
 
@@ -33,7 +35,7 @@ let pass=0, fail=0;
 const ok=(n,c,x='')=>{ if(c){pass++;console.log('  PASS',n);} else {fail++;console.log('  FAIL',n,x);} };
 
 console.log('== painel do agente ==');
-ok('KPIs do agente renderizam', d.querySelectorAll('#agKpis .kpi').length === 5, d.querySelectorAll('#agKpis .kpi').length);
+ok('KPIs do agente renderizam', d.querySelectorAll('#agKpis .kpi').length === 6, d.querySelectorAll('#agKpis .kpi').length);
 ok('mostra quantos nao chegam ao diretor', t('#agKpis').includes('nunca chegam ao diretor'));
 ok('mostra horas substituidas', /\d+h/.test(t('#agKpis')));
 ok('tabela de acoes do agente', d.querySelectorAll('#agAcoes tbody tr').length >= 4, d.querySelectorAll('#agAcoes tbody tr').length);
@@ -43,9 +45,28 @@ ok('declara a lista fechada e a trava', t('#agTrava').includes('Nenhuma delas ap
 ok('lotes de CAP com data e PIX', t('#agLotes').includes('PIX'), t('#agLotes').slice(0,80));
 ok('declara por que o valor e nulo', t('#agLotes').includes('não é legível'));
 
+console.log('\n== lixeira (regra 1) ==');
+ok('nota da lixeira explica retencao e restauracao',
+   /nunca mais arquiva/.test(t('#lxNota')) && /não expira/.test(t('#lxNota')), t('#lxNota').slice(0,110));
+ok('tabela da lixeira preenchida', d.querySelectorAll('#lixeira tbody tr').length > 0,
+   d.querySelectorAll('#lixeira tbody tr').length);
+ok('tem campo de busca', !!d.querySelector('#lxBusca'));
+ok('tem botao de restaurar', !!d.querySelector('#lixeira button'));
+ok('KPI da lixeira aparece', /na lixeira/.test(t('#agKpis')));
+{
+  const antes = d.querySelectorAll('#lixeira tbody tr').length;
+  dom.window.alert = () => {};
+  const bt = d.querySelector('#lixeira button');
+  const idm = bt.getAttribute('onclick').match(/\d+/);
+  await dom.window.restaurar(Number(idm[1] ?? idm[0]));
+  await new Promise(r => setTimeout(r, 400));
+  ok('restaurar marca quem restaurou', /restaurado por/.test(t('#lixeira')), t('#lixeira').slice(0,140));
+}
+
 console.log('\n== parecer do agente (modal) ==');
 {
-  const linha = d.querySelector('#agOutbox tbody tr');
+  // A linha do chamado de higiene nao tem pedido, entao nao abre parecer.
+  const linha = [...d.querySelectorAll('#agOutbox tbody tr')].find(t => t.getAttribute('onclick'));
   const idm = linha && linha.getAttribute('onclick').match(/\d+/);
   if (idm) {
     await dom.window.verParecer(Number(idm[0]));

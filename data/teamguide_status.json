@@ -1,0 +1,354 @@
+[
+  {
+    "login": "joao.conde",
+    "nome": "Joao Batista Rufino Conde",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Transportes",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES > TRANSPORTES"
+  },
+  {
+    "login": "edivar",
+    "nome": "Edivar Moreira Marinho Filho",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Head de Sourcing e Procurement",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > TIME JOAQUIM QUINDERE > SOURCING E PROCUREMENT GOBEAUTE"
+  },
+  {
+    "login": "joaquim",
+    "nome": "Joaquim Quindere",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Diretor de Operacoes",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > TIME JOAQUIM QUINDERE"
+  },
+  {
+    "login": "simony.morais",
+    "nome": "Simony Fernanda Santos De Oliveira Morais",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Diretora de Gente e Gestao",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > GENTE E GESTAO"
+  },
+  {
+    "login": "luis",
+    "nome": "Luis Liveri",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "CEO",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI"
+  },
+  {
+    "login": "guilherme",
+    "nome": "Guilherme Reis da Nobrega",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "COO",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA"
+  },
+  {
+    "login": "andre.castro",
+    "nome": "Andre Moreira de Mesquita Castro",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Diretor de Growth e Marketing de Influencia",
+    "departamento": "Gogroup > N1 > GROWTH"
+  },
+  {
+    "login": "carla.alencar",
+    "nome": "Carla Bruna Araujo Couto De Alencar",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Analista de Operacoes Pleno",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES > OPERACOES GOBEAUTE"
+  },
+  {
+    "login": "joao.simao",
+    "nome": "Joao Guilherme De Grossi Kochanowski Simao",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente B2B",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > TIME JOAQUIM QUINDERE > B2B GOBEAUTE"
+  },
+  {
+    "login": "rafael.menezes",
+    "nome": "Rafael dos Santos Menezes",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Diretor de Operacoes",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES"
+  },
+  {
+    "login": "silvia.scarabelot",
+    "nome": "Silvia Scarabelot",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Produto",
+    "departamento": "Gogroup > N1 > MKT | PRODUTO | B2B GOCASE > PRODUTO > DESENVOLVIMENTO PRODUTO GOCASE"
+  },
+  {
+    "login": "laiza.garcia",
+    "nome": "Laiza Sousa Garcia",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Head de Gestao e CX",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > CX > CX"
+  },
+  {
+    "login": "natalia.pavao",
+    "nome": "Natalia Pavao Silva",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Operacoes e Qualidade",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES > OPERACOES GOCASE > QUALIDADE GOCASE"
+  },
+  {
+    "login": "samir.labib",
+    "nome": "Samir Labib Teixeira Salamoun",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente Fiscal",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > FINANCAS > FISCAL"
+  },
+  {
+    "login": "murilo.guimaraes",
+    "nome": "Jose Murilo Veloso Guimaraes Filho",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Supply",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES > SUPPLY GOGROUP"
+  },
+  {
+    "login": "antonio.mendes",
+    "nome": "Antonio Bruno Goncalves Mendes",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Estagiario Go Builders AI",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > FINANCAS > FP&A | TESOURARIA"
+  },
+  {
+    "login": "fernanda.alves",
+    "nome": "Fernanda De Souza Alves",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-02-12",
+    "cargo": "Gerente B2B",
+    "departamento": null
+  },
+  {
+    "login": "larissa.queiroz",
+    "nome": "Larissa Soares Maia de Queiroz",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Especialista de Melhoria Continua",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > CX > CX > [CX] MELHORIA CONTINUA"
+  },
+  {
+    "login": "camila.mussim",
+    "nome": "Camila Boatto Mussim",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Head de Compliance",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > JURIDICO"
+  },
+  {
+    "login": "juliana.bortoletto",
+    "nome": "Juliana de Oliveira Bortoletto",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Gente e Gestao",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > GENTE E GESTAO > FABRICAS GENTE E GESTAO"
+  },
+  {
+    "login": "wilian.mello",
+    "nome": "Wilian de Mello Souza",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Logistica",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES > OPERACOES GOCASE > ARMAZEM EXTREMA"
+  },
+  {
+    "login": "fernanda.gentil",
+    "nome": "Fernanda Gentil Peixoto",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Head de Operacoes",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES > OPERACOES GOCASE"
+  },
+  {
+    "login": "cristianne.moura",
+    "nome": "Cristianne Moura Roberto",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-05-15",
+    "cargo": "Gerente de CSC",
+    "departamento": null
+  },
+  {
+    "login": "rodrigo.cruz",
+    "nome": "Rodrigo Ribeiro Monteiro Cruz",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Head de Financas",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > FINANCAS > FP&A | TESOURARIA"
+  },
+  {
+    "login": "jessica.park",
+    "nome": "Jessica Bo Hee Park",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Produto",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > TIME JOAQUIM QUINDERE > DESENVOLVIMENTO PRODUTO GOBEAUTE"
+  },
+  {
+    "login": "lucas.guerra",
+    "nome": "Lucas Teixeira Pinheiro Guerra",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-06-01",
+    "cargo": "Head de B2B",
+    "departamento": null
+  },
+  {
+    "login": "marilia.dantas",
+    "nome": "Anna Marilia Pinheiro Dantas",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-07-27",
+    "cargo": "Gerente Financeiro",
+    "departamento": null
+  },
+  {
+    "login": "antonelle.gomes",
+    "nome": "Antonelle Araujo Gomes",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-07-09",
+    "cargo": "Analista Fiscal PL",
+    "departamento": null
+  },
+  {
+    "login": "carmem.bianca",
+    "nome": "Carmem Bianca Quirino de Sousa",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-04-30",
+    "cargo": "Estagiario(a) de Projetos",
+    "departamento": null
+  },
+  {
+    "login": "matheus",
+    "nome": null,
+    "ativo": "desconhecido",
+    "evidencia": "login ambiguo: nao existe e-mail 'matheus@' na base. Ha 5 pessoas ativas com esse primeiro nome (Matheus De Faria Galvao, Matheus Sa de Castro, Matheus Vasconcelos de Almeida, Matheus Zacche Caetano, Mateus de Alcantara Aragao) e o get_employee_tenure com includeResigned nao completou (HTTP 429 repetido). NAO ha evidencia de desligamento - apenas nao foi possivel identificar a pessoa",
+    "cargo": null,
+    "departamento": null
+  },
+  {
+    "login": "joao.carlos",
+    "nome": "Joao Carlos de Oliveira Neto",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Coordenador de Projetos",
+    "departamento": "Gogroup > N1 > MKT | PRODUTO | B2B GOCASE > PRODUTO > PROJETOS - PRODUTO"
+  },
+  {
+    "login": "luisa",
+    "nome": "Luisa Ferraiuoli Vieira de Souza",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Gerente de Projetos",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > TIME JOAQUIM QUINDERE"
+  },
+  {
+    "login": "carlos.feitosa",
+    "nome": "Jose Carlos Feitosa Azevedo",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-07-09",
+    "cargo": "Coordenador Financeiro Pleno",
+    "departamento": null
+  },
+  {
+    "login": "anderson.matos",
+    "nome": "Anderson dos Santos Matos",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-06-24",
+    "cargo": "Coordenador Financeiro",
+    "departamento": null
+  },
+  {
+    "login": "vitoria.azevedo",
+    "nome": "Vitoria Oliveira Azevedo",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Coordenadora de Suprimento",
+    "departamento": "Gogroup > N1 > N1 - GUILHERME NOBREGA > OPERACOES > SUPPLY GOGROUP > [SUPPLY] TIME VITORIA AZEVEDO"
+  },
+  {
+    "login": "nort.furlani",
+    "nome": "Nortpool Furlani Junior",
+    "ativo": false,
+    "evidencia": "nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-07-24",
+    "cargo": "Diretor de Marketing",
+    "departamento": null
+  },
+  {
+    "login": "vinicius.nishide",
+    "nome": "Vinicius Medice Nishide",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Diretor Financeiro",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > FINANCAS"
+  },
+  {
+    "login": "rogerio.azbuy",
+    "nome": "Rogerio Prado",
+    "ativo": true,
+    "evidencia": "match por inferencia (unico 'Rogerio' em toda a base, incluindo desligados, e o login aponta para a AZ); consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Socio",
+    "departamento": "Gogroup > N1 > AZ"
+  },
+  {
+    "login": "nort",
+    "nome": "Nortpool Furlani Junior",
+    "ativo": false,
+    "evidencia": "match por inferencia (mesmo aprovador de 'nort.furlani'; unica pessoa 'Nort*' na base); nao consta no organograma de ativos; get_employee_tenure (includeResigned=true) retorna resigned=true com resignationDate 2026-07-24",
+    "cargo": "Diretor de Marketing",
+    "departamento": null
+  },
+  {
+    "login": "kamilly.silva",
+    "nome": "Kamilly Silva",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Analista Juridico JR I",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > JURIDICO"
+  },
+  {
+    "login": "lucas.fernandes",
+    "nome": "Lucas de Sousa Fernandes",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Analista Financeiro JR II",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > FINANCAS > FP&A | TESOURARIA > TESOURARIA > CONTAS A RECEBER"
+  },
+  {
+    "login": "izabelly.machado",
+    "nome": "Maria Izabelly Barbosa Machado",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Estagiario Financeiro",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > FINANCAS > FP&A | TESOURARIA > TESOURARIA > CONTAS A RECEBER > [FINANCEIRO] TIME RENATA LIRA"
+  },
+  {
+    "login": "joaovictor.esteves",
+    "nome": "Joao Victor Tavares Esteves",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Analista de RPA PL",
+    "departamento": "Gogroup > N1 > BIZOPS > RPA"
+  },
+  {
+    "login": "luciano.cavalcante",
+    "nome": "Luciano Pinheiro Cavalcante",
+    "ativo": true,
+    "evidencia": "consta em list_employees (organograma Gogroup, 444 ativos, consulta 18/09/2026) e get_employee_tenure nao o marca como resigned",
+    "cargo": "Assistente de RPA Financeiro III",
+    "departamento": "Gogroup > N1 > N1 - LUIS LIVERI > FINANCAS"
+  }
+]

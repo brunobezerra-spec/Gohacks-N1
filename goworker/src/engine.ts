@@ -1,6 +1,9 @@
 // Goworker do Financeiro - motor de triagem de solicitacoes de pagamento
 // JS puro, sem dependencias. Roda em Node e em Cloudflare Workers.
 
+import { ativo as sinalAtivo, severidadeDe, PESO, ehTributo, janelaDe, REGRAS } from "./regras";
+import { saiuDaEmpresa, situacao } from "./teamguide";
+
 // ---------------------------------------------------------------- normalizacao
 
 const ACENTOS = { 'á':'a','à':'a','â':'a','ã':'a','ä':'a','é':'e','è':'e','ê':'e','ë':'e',
@@ -261,6 +264,15 @@ export function buildBaselines(all) {
 
 // ---------------------------------------------------------------- regras
 
+// Raizes de CNPJ das 44 filiais do Anexo I da Politica (27 empresas).
+// Fonte: dados/mestre/empresas_grupo.csv, entregue pelo financeiro em 18/09/2026.
+export const ANEXO_I_RAIZES = new Set([
+  "48290289","26301600","10256416","54595758","54190174","36838707","54137817","57168111",
+  "60453002","60453162","36703992","22165464","46551987","53182517","54321345","23860650",
+  "46743270","46537034","36202300","53717946","54047425","58319197","58181480","57443771",
+  "57344563","38246589","58323315",
+]);
+
 export const ZOMBIE_DAYS = 45;
 export const APPROVER_IDLE_DAYS = 90;
 
@@ -437,7 +449,11 @@ export function analyze(all, opts = {}) {
       // exige historico com pelo menos 2 decisoes: uma unica ocorrencia antiga
       // nao e evidencia suficiente para bloquear um pagamento.
       const forte = nomes && nomes.size && (parties.decididosPorCnpj.get(r.cnpjRoot) ?? 0) >= 2;
-      if (forte && ![...nomes].some(n => nomesCompativeis(r.supplierNorm, n))) {
+      // Regra 9 do handoff: mesma raiz nao e divergencia (ja tratado acima, a
+      // comparacao corre por raiz). Raiz do Anexo I nao e divergencia tambem:
+      // e operacao entre partes relacionadas, e o sinal proprio disso ja existe.
+      const ehDoGrupo = r.cnpjRoot && ANEXO_I_RAIZES.has(r.cnpjRoot);
+      if (forte && !ehDoGrupo && ![...nomes].some(n => nomesCompativeis(r.supplierNorm, n))) {
         findings.push({ code: 'NOME_DIVERGE_DO_CNPJ', severity: 3,
           msg: `A raiz de CNPJ ${r.cnpjRoot} ja foi usada ${nomes.size === 1 ? 'sempre' : 'so'} sob outro nome (${[...nomes].slice(0,2).join(' / ')}). Aqui aparece como "${r.supplier}".`,
           evidence: [{ cnpj: r.cnpj, raiz: r.cnpjRoot, nomesHistoricos: [...nomes].slice(0, 5), nomeAtual: r.supplier }] });
@@ -477,12 +493,18 @@ export function analyze(all, opts = {}) {
     if (!isTest && r.cpf && !isValidCPF(r.cpf)) findings.push({ code: 'CPF_INVALIDO', severity: 3,
       msg: `CPF ${r.cpf} reprova no digito verificador.`, evidence: [{ cpf: r.cpf }] });
 
-    // R3 fila orfa: aprovador parou de decidir e continua dono da fila
+    // R3 fila orfa. Regra 7 do handoff: "confirmar no teamguide se o aprovador
+    // ainda trabalha na empresa". Estar lento nao e fila orfa: quem continua
+    // empregado e so demorou e cadastro defasado do GoService, e ali o sinal nao
+    // sai. So sai quando ha EVIDENCIA de desligamento.
     const act = r.approver ? activity.get(r.approver) : null;
-    if (act && act.idleDays !== null && act.idleDays > APPROVER_IDLE_DAYS && act.pending > 0) {
+    const sit = situacao(r.approver);
+    if (act && act.pending > 0 && saiuDaEmpresa(r.approver)) {
       findings.push({ code: 'APROVADOR_INATIVO', severity: 3,
-        msg: `${r.approver} nao decide nada ha ${Math.round(act.idleDays)} dias e ainda segura ${act.pending} pedido(s). Fila orfa.`,
-        evidence: [{ approver: r.approver, idleDays: Math.round(act.idleDays), pending: act.pending, decided: act.decided }] });
+        msg: `${sit.nome ?? r.approver} (${sit.cargo ?? "cargo nao mapeado"}) nao trabalha mais na empresa e continua como aprovador de ${act.pending} pedido(s). Evidencia: ${sit.evidencia}`,
+        evidence: [{ approver: r.approver, nome: sit.nome, cargo: sit.cargo, evidencia: sit.evidencia,
+          pending: act.pending, decided: act.decided,
+          idleDays: act.idleDays === null ? null : Math.round(act.idleDays) }] });
     }
 
     // R4 fila zumbi
@@ -564,10 +586,29 @@ export function analyze(all, opts = {}) {
     const p = prof.get(r.dupKey);
     if (r.money && r.submittedAt && p) {
       const sameDay = p.perDay.get(dayKey(r.submittedAt)) || 1;
-      if (sameDay > Math.max(2, p.perDayP95)) findings.push({ code: 'VOLUME_ACIMA_DO_PADRAO', severity: 1,
+      // Regra 6 do handoff: "exceto tributos". Orgao arrecadador concentra
+      // pagamento em lote por natureza; volume alto ali nao diz nada.
+      if (sameDay > Math.max(2, p.perDayP95) && !ehTributo(r)) findings.push({ code: 'VOLUME_ACIMA_DO_PADRAO', severity: 1,
         msg: `${sameDay} pedidos deste beneficiario em ${dayKey(r.submittedAt)}; o p95 historico dele e ${p.perDayP95}/dia.`,
         evidence: [{ sameDay, p95: p.perDayP95, total: p.total, distinctDays: p.distinctDays }] });
     }
+
+    // O registro de regras (regras.ts) e quem manda: sinal desligado nao sai, e
+    // a severidade vem de la, nao do numero que a deteccao chutou.
+    const vivos = findings
+      .filter((f: any) => sinalAtivo(f.code))
+      .map((f: any) => {
+        // Janela de 15 dias (regras 7 e 8 do handoff): passado o prazo, o sinal
+        // deixa de travar e vira devolucao ao solicitante. "caso contrario
+        // volta para o solicitante" e literal: nao roteia, nao trava.
+        const janela = janelaDe(f.code);
+        const fora = janela !== null && ageDays !== null && ageDays > janela;
+        const sev = fora ? "RESSALVA" : severidadeDe(f.code);
+        return { ...f, severidade: sev, severity: PESO[sev], foraDaJanela: fora,
+          janelaDias: janela,
+          msg: fora ? `${f.msg} Fora da janela de ${janela} dias: em vez de travar, volta ao solicitante.` : f.msg };
+      });
+    findings.length = 0; findings.push(...vivos);
 
     const d = decide(findings);
     // Prioridade separa "o que fazer" de "em que ordem". Idade sozinha era o unico

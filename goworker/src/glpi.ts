@@ -22,6 +22,7 @@ const ESCRITA_PERMITIDA: { metodo: string; re: RegExp; oque: string }[] = [
   { metodo: "POST", re: /^\/ITILFollowup\/$/,          oque: "comentar no chamado (devolver ao solicitante)" },
   { metodo: "POST", re: /^\/ITILSolution\/$/,           oque: "registrar solucao (encerrar o que nao deveria existir)" },
   { metodo: "PUT",  re: /^\/TicketValidation\/\d+$/,    oque: "trocar QUEM valida, campo users_id_validate" },
+  { metodo: "POST", re: /^\/Ticket\/$/,                  oque: "abrir UM chamado de higiene com a lista (regra 4)" },
 ];
 
 export function assertEndpointPermitido(metodo: string, caminho: string) {
@@ -188,11 +189,18 @@ export async function trocarAprovador(env: GlpiEnv, session: string, validationI
   return escrever(env, session, "PUT", `/TicketValidation/${validationId}`, { input });
 }
 
+// Regra 4 do handoff: os registros de teste sao encerrados sem notificar
+// ninguem, e UM chamado de higiene carrega a lista inteira. Um, nao 106.
+export async function abrirChamadoDeHigiene(env: GlpiEnv, session: string, titulo: string, html: string) {
+  return escrever(env, session, "POST", "/Ticket/",
+    { input: { name: titulo, content: html, type: 2, urgency: 2, impact: 2, priority: 2 } });
+}
+
 // ---------------------------------------------------------------- orquestracao
 
 export type Ordem = {
   tipo: "DEVOLVER_AO_SOLICITANTE" | "RECOMENDAR_ESTORNO" | "NOTIFICAR_PENALIDADE"
-      | "ENCERRAR_PEDIDO" | "ROTEAR_PARA_ALCADA";
+      | "ENCERRAR_PEDIDO" | "ROTEAR_PARA_ALCADA" | "ABRIR_CHAMADO_DE_HIGIENE";
   validationId: number;
   html?: string;
   novoUsuarioId?: number;
@@ -220,6 +228,17 @@ export async function executar(env: GlpiEnv, ordens: Ordem[], opts: { piloto?: s
   try {
     for (const ordem of ordens) {
       let o: any = ordem;
+
+      // O chamado de higiene nao pende de nenhuma validacao: e um chamado novo.
+      if (o.tipo === "ABRIR_CHAMADO_DE_HIGIENE") {
+        const envio = m === "executar"
+          ? await abrirChamadoDeHigiene(env, session, o.titulo ?? "Higiene de base do Goworker", (o.html ?? "") + ASSINATURA)
+          : null;
+        resultados.push({ ...o, chamada: { metodo: "POST", url: "/Ticket/", input: { name: o.titulo } },
+          status: m === "ensaio" ? "ensaio" : (envio?.ok ? "executada" : "falhou"),
+          resposta: envio?.resposta ?? null, httpStatus: envio?.status ?? null });
+        continue;
+      }
       const alvo = await lerAprovacao(env, session, o.validationId);
       if (!alvo.ok) { resultados.push({ ...o, status: "aprovacao_ilegivel", detalhe: alvo }); continue; }
 
