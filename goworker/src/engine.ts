@@ -117,9 +117,23 @@ export const HOUR = 3600e3, DAY = 24 * HOUR;
 
 // ---------------------------------------------------------------- identidade
 
-// chave de identidade do beneficiario, na melhor granularidade disponivel
+// CNPJ tem estrutura: 8 digitos de RAIZ (a empresa) + 4 de ORDEM (matriz 0001,
+// filiais 0002+) + 2 de digito verificador. Matriz e filial sao estabelecimentos
+// diferentes da MESMA empresa: o dinheiro vai para contas diferentes, mas o
+// historico e a reputacao sao da empresa inteira.
+//
+// Por isso existem DUAS chaves:
+//   partyKey   = estabelecimento exato. Destino do pagamento.
+//   empresaKey = raiz. Historico, reputacao, "ja conhecemos esse fornecedor?".
 export function partyKey(p) {
   if (p.cnpj) return 'cnpj:' + p.cnpj;
+  if (p.cpf) return 'cpf:' + p.cpf;
+  if (p.supplierNorm) return 'nome:' + p.supplierNorm;
+  return 'kind:' + p.kind;
+}
+
+export function empresaKey(p) {
+  if (p.cnpj) return 'raiz:' + p.cnpj.slice(0, 8);
   if (p.cpf) return 'cpf:' + p.cpf;
   if (p.supplierNorm) return 'nome:' + p.supplierNorm;
   return 'kind:' + p.kind;
@@ -151,6 +165,7 @@ export function enrich(records) {
       cnpjRoot: p.cnpjRoot,
       cpf: p.cpf,
       partyKey: partyKey(p),
+      empresaKey: empresaKey(p),
       dupKey: dupKey(p),
       submittedAt: sub,
       decidedAt: val,
@@ -189,11 +204,12 @@ export function buildBaselines(all) {
     approverSla.set(a, { n: hrs.length, medianH: median(hrs), p90H: pct(hrs, 0.9) });
   }
 
-  // fornecedores ja vistos em decisoes passadas (qualquer status decidido)
-  const knownParties = new Map(); // partyKey -> {n, approved, rejected, firstSeen, lastSeen, name}
+  // Reputacao e historico correm por EMPRESA (raiz do CNPJ). Uma filial nova de
+  // fornecedor conhecido nao e um beneficiario desconhecido.
+  const knownParties = new Map(); // empresaKey -> {n, approved, rejected, firstSeen, lastSeen, name}
   for (const r of all) {
     if (r.status === 'Aguardando') continue;
-    const k = r.partyKey;
+    const k = r.empresaKey;
     if (!knownParties.has(k)) knownParties.set(k, { n: 0, approved: 0, rejected: 0, firstSeen: Infinity, lastSeen: -Infinity, name: r.supplier });
     const e = knownParties.get(k);
     e.n++;
@@ -203,10 +219,15 @@ export function buildBaselines(all) {
     if (!e.name && r.supplier) e.name = r.supplier;
   }
 
+  // Estabelecimentos (CNPJ de 14 digitos) que ja receberam pagamento decidido.
+  const estabelecimentosConhecidos = new Set();
+  for (const r of all) if (r.status !== 'Aguardando' && r.cnpj) estabelecimentosConhecidos.add(r.cnpj);
+
   const allHrs = decided.map(r => r.decisionHours);
   return {
     approverSla,
     knownParties,
+    estabelecimentosConhecidos,
     globalMedianH: median(allHrs),
     globalP90H: pct(allHrs, 0.9),
     decidedCount: decided.length,
@@ -259,19 +280,22 @@ export function buildKeyProfiles(all) {
 // Que nomes ja apareceram sob cada CNPJ, e com que taxa de recusa cada
 // beneficiario foi decidido. Base para as regras de identidade.
 export function buildPartyIndex(all) {
-  const porCnpj = new Map();          // cnpj -> Set de nomes normalizados vistos em decididos
-  const decididosPorCnpj = new Map(); // cnpj -> quantas decisoes ja houve
-  const recusa = new Map();           // partyKey -> {aprovados, recusados, nome}
+  // Nome do fornecedor e atributo da EMPRESA, nao do estabelecimento: a matriz e
+  // a filial tem a mesma razao social. Por isso o indice de nomes corre por raiz.
+  const porCnpj = new Map();          // raiz -> Set de nomes normalizados vistos em decididos
+  const decididosPorCnpj = new Map(); // raiz -> quantas decisoes ja houve
+  const recusa = new Map();           // empresaKey -> {aprovados, recusados, nome}
   for (const r of all) {
     if (r.status === 'Aguardando') continue;
-    if (r.cnpj) decididosPorCnpj.set(r.cnpj, (decididosPorCnpj.get(r.cnpj) ?? 0) + 1);
-    if (r.cnpj && r.supplierNorm) {
-      if (!porCnpj.has(r.cnpj)) porCnpj.set(r.cnpj, new Set());
-      porCnpj.get(r.cnpj).add(r.supplierNorm);
+    const raiz = r.cnpj ? r.cnpj.slice(0, 8) : null;
+    if (raiz) decididosPorCnpj.set(raiz, (decididosPorCnpj.get(raiz) ?? 0) + 1);
+    if (raiz && r.supplierNorm) {
+      if (!porCnpj.has(raiz)) porCnpj.set(raiz, new Set());
+      porCnpj.get(raiz).add(r.supplierNorm);
     }
-    if (r.partyKey) {
-      if (!recusa.has(r.partyKey)) recusa.set(r.partyKey, { aprovados: 0, recusados: 0, nome: r.supplier });
-      const e = recusa.get(r.partyKey);
+    if (r.empresaKey) {
+      if (!recusa.has(r.empresaKey)) recusa.set(r.empresaKey, { aprovados: 0, recusados: 0, nome: r.supplier });
+      const e = recusa.get(r.empresaKey);
       if (r.status === 'Aprovado') e.aprovados++;
       if (r.status === 'Recusado') e.recusados++;
       if (!e.nome && r.supplier) e.nome = r.supplier;
@@ -374,14 +398,16 @@ export function analyze(all, opts = {}) {
     // ONFLY TECNOLOGIA num CNPJ cujo historico inteiro era de outra pessoa fisica.
     const nomeEhLixo = !/[a-z]{3}/.test(r.supplierNorm || '');
     if (r.money && !isTest && r.cnpj && r.supplierNorm && !nomeEhLixo) {
-      const nomes = parties.porCnpj.get(r.cnpj);
+      // Compara contra os nomes ja vistos na RAIZ, nao no estabelecimento exato:
+      // senao toda filial nova de fornecedor conhecido vira "nome divergente".
+      const nomes = parties.porCnpj.get(r.cnpjRoot);
       // exige historico com pelo menos 2 decisoes: uma unica ocorrencia antiga
       // nao e evidencia suficiente para bloquear um pagamento.
-      const forte = nomes && nomes.size && (parties.decididosPorCnpj.get(r.cnpj) ?? 0) >= 2;
+      const forte = nomes && nomes.size && (parties.decididosPorCnpj.get(r.cnpjRoot) ?? 0) >= 2;
       if (forte && ![...nomes].some(n => nomesCompativeis(r.supplierNorm, n))) {
         findings.push({ code: 'NOME_DIVERGE_DO_CNPJ', severity: 3,
-          msg: `O CNPJ ${r.cnpj} ja foi usado ${nomes.size === 1 ? 'sempre' : 'so'} sob outro nome (${[...nomes].slice(0,2).join(' / ')}). Aqui aparece como "${r.supplier}".`,
-          evidence: [{ cnpj: r.cnpj, nomesHistoricos: [...nomes].slice(0, 5), nomeAtual: r.supplier }] });
+          msg: `A raiz de CNPJ ${r.cnpjRoot} ja foi usada ${nomes.size === 1 ? 'sempre' : 'so'} sob outro nome (${[...nomes].slice(0,2).join(' / ')}). Aqui aparece como "${r.supplier}".`,
+          evidence: [{ cnpj: r.cnpj, raiz: r.cnpjRoot, nomesHistoricos: [...nomes].slice(0, 5), nomeAtual: r.supplier }] });
       }
     }
 
@@ -394,8 +420,8 @@ export function analyze(all, opts = {}) {
     }
 
     // R12 beneficiario com taxa de recusa muito acima da base da empresa (0,9%)
-    if (r.money && !isTest && r.partyKey) {
-      const e = parties.recusa.get(r.partyKey);
+    if (r.money && !isTest && r.empresaKey) {
+      const e = parties.recusa.get(r.empresaKey);
       if (e && e.recusados >= 1 && (e.aprovados + e.recusados) >= 2) {
         const taxa = e.recusados / (e.aprovados + e.recusados);
         if (taxa >= 0.15) findings.push({ code: 'BENEFICIARIO_ALTA_RECUSA', severity: 2,
@@ -441,10 +467,15 @@ export function analyze(all, opts = {}) {
 
     // R6 beneficiario sem historico decidido
     if (r.money && !isTest && (r.cnpj || r.cpf)) {
-      const known = base.knownParties.get(r.partyKey);
+      const known = base.knownParties.get(r.empresaKey);
+      const outraFilial = r.cnpj && [...base.knownParties.keys()].includes('raiz:' + r.cnpj.slice(0, 8));
       if (!known) findings.push({ code: 'BENEFICIARIO_NOVO', severity: 2,
-        msg: 'Beneficiario sem nenhum pedido decidido no historico. Conferir cadastro antes de liberar.',
-        evidence: [{ partyKey: r.partyKey }] });
+        msg: `Empresa (raiz ${r.cnpjRoot ?? '?'}) sem nenhum pedido decidido no historico. Conferir cadastro antes de liberar.`,
+        evidence: [{ empresaKey: r.empresaKey, raiz: r.cnpjRoot }] });
+      else if (r.cnpj && !base.estabelecimentosConhecidos.has(r.cnpj)) findings.push({
+        code: 'ESTABELECIMENTO_NOVO', severity: 1,
+        msg: `Empresa conhecida (${known.n} pedidos decididos na raiz ${r.cnpjRoot}), mas este estabelecimento ${r.cnpj.slice(8,12)} e o primeiro pagamento. Conferir os dados bancarios da filial.`,
+        evidence: [{ raiz: r.cnpjRoot, ordem: r.cnpj.slice(8, 12), historicoDaEmpresa: known.n }] });
       else if (known.rejected > 0 && known.approved === 0) findings.push({ code: 'BENEFICIARIO_SO_RECUSADO', severity: 3,
         msg: `Beneficiario tem ${known.rejected} recusa(s) e nenhuma aprovacao no historico.`,
         evidence: [{ rejected: known.rejected }] });

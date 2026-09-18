@@ -93,10 +93,15 @@ export function processar(r: any, ctx: any) {
     acao = "ENCERRAR"; porque = "Registro de teste. Nao ha obrigacao financeira a liquidar.";
   } else if (regras.has("DESPESA_PRE_APROVADA")) {
     acao = "ENCERRAR"; porque = "Anexo II: despesa ja pre-aprovada por contrato ou orcamento, nao passa por este fluxo.";
-  } else if (regras.has("INTERCOMPANY")) {
-    acao = "ENCERRAR"; porque = "Operacao entre empresas do grupo. O playbook fiscal trata intercompany por tipo 51 / codigo 010, sem gerar titulo a pagar.";
 
-  // 2. Art. 11: parado alem de 120 dias, a politica manda recomendar estorno.
+  // 2. Intercompany NAO e encerrado pelo agente. O playbook fiscal diz que a
+  //    operacao roda por tipo 51 / codigo 010 sem gerar titulo, mas quem confirma
+  //    que e mesmo intercompany e a Controladoria. Decisao do Bruno em 18/09/2026.
+  } else if (regras.has("INTERCOMPANY")) {
+    acao = "ENCAMINHAR";
+    porque = "Operacao entre empresas do grupo (Anexo I). Nao encerro sozinho: a Controladoria confirma se segue por intercompany, que pelo playbook fiscal nao gera titulo a pagar.";
+
+  // 3. Art. 11: parado alem de 120 dias, a politica manda recomendar estorno.
   } else if (regras.has("ESTORNO_RECOMENDADO")) {
     acao = "RECOMENDAR_ESTORNO"; porque = `Art. 11: parado ha ${Math.round(pol.idadeDias ?? 0)} dias, acima dos ${ESTORNO_RECOMENDADO_DIAS} previstos.`;
 

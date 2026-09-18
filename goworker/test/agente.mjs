@@ -130,7 +130,7 @@ ok('aviso de que sao premissas', /PREMISSAS|premissas/i.test(hh.aviso));
 console.log('\n== 11. ferramentas MCP do agente ==');
 let m=await rpc('tools/list',{});
 const nomes=m.result.tools.map(t=>t.name);
-ok('16 ferramentas', nomes.length===16, nomes.length);
+ok('18 ferramentas', nomes.length===18, nomes.length);
 for (const t of ['goworker_agente_resumo','goworker_agente_fila','goworker_agente_parecer',
                  'goworker_outbox','goworker_despachar','goworker_lotes_cap','goworker_premissas_hh'])
   ok('expoe '+t, nomes.includes(t));
@@ -138,6 +138,102 @@ m=await rpc('tools/call',{name:'goworker_agente_resumo',arguments:{}});
 ok('resumo do agente via MCP', m.result?.structuredContent?.porAcao!==undefined);
 m=await rpc('tools/call',{name:'goworker_despachar',arguments:{max:2}});
 ok('despacho via MCP nao entrega sem webhook', m.result?.structuredContent?.entregues===0);
+
+console.log('\n== 12. EXECUCAO no GoService/GLPI ==');
+{
+  // sem credencial o agente nao age
+  let e = await j(await call('/api/agente/executar',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:'{"max":3}'}));
+  ok('sem credencial nao executa nada', e.executadas===0 && /nao configurados/.test(e.erro||''), e.erro);
+  const st = await j(await call('/api/agente/execucao'));
+  ok('status diz que falta credencial', /FALTANDO/.test(st.credenciais), st.credenciais);
+  ok('modo padrao e ensaio', st.modo==='ensaio', st.modo);
+  ok('declara o limite estrutural', /escreve status, is_approved ou comment_validation/.test(st.limite||''), st.limite);
+
+  // com credencial falsa e GLPI mockado, modo ensaio monta a chamada e NAO envia
+  const chamadas = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o={}) => {
+    const url = String(u); chamadas.push({url, metodo: o.method||'GET'});
+    if (url.includes('initSession')) return new Response(JSON.stringify({session_token:'sess123'}),{status:200});
+    if (url.includes('killSession')) return new Response('{}',{status:200});
+    if (/TicketValidation\/\d+$/.test(url) && (o.method||'GET')==='GET')
+      return new Response(JSON.stringify({tickets_id:77777,users_id_validate:42,status:2,users_id:9}),{status:200});
+    return new Response('{"id":1}',{status:201});
+  };
+  const envC = { DB: env.DB, GLPI_APP_TOKEN:'app', GLPI_USER_TOKEN:'user' };
+  const callC = (p,o={}) => worker.fetch(new Request('https://t.local'+p,o), envC);
+  e = await j(await callC('/api/agente/executar',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"42"}'}));
+  ok('ensaio nao executa', e.modo==='ensaio' && e.executadas===0, JSON.stringify({m:e.modo,x:e.executadas}));
+  ok('ensaio monta a chamada exata', e.resultados.every(r=>r.chamada?.url && r.chamada?.metodo),
+     JSON.stringify(e.resultados[0]?.chamada||{}).slice(0,120));
+  ok('ensaio resolve o ticket a partir da aprovacao', e.resultados.every(r=>r.ticketId===77777));
+  ok('nenhum POST de escrita saiu em ensaio',
+     !chamadas.some(c=>c.metodo!=='GET' && !/initSession|killSession/.test(c.url)),
+     chamadas.filter(c=>c.metodo!=='GET').map(c=>c.metodo+' '+c.url.split('apirest.php')[1]).join(' | '));
+  ok('aviso explica como ligar', /GLPI_MODO=executar/.test(e.aviso));
+
+  // escopo de piloto: aprovador diferente nao e tocado
+  chamadas.length=0;
+  e = await j(await callC('/api/agente/executar',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"999"}'}));
+  ok('piloto filtra quem nao e do escopo', e.resultados.every(r=>r.status==='fora_do_piloto'),
+     e.resultados.map(r=>r.status).join(','));
+
+  // modo executar: agora sim escreve, e so nos endpoints permitidos
+  chamadas.length=0;
+  const envX = { ...envC, GLPI_MODO:'executar' };
+  const callX = (p,o={}) => worker.fetch(new Request('https://t.local'+p,o), envX);
+  e = await j(await callX('/api/agente/executar',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:'{"max":3,"piloto":"42"}'}));
+  ok('modo executar escreve', e.modo==='executar' && e.executadas>0, JSON.stringify({m:e.modo,x:e.executadas}));
+  const escritas = chamadas.filter(c=>c.metodo!=='GET');
+  ok('escreveu so em ITILFollowup / ITILSolution / TicketValidation',
+     escritas.every(c=>/ITILFollowup|ITILSolution|TicketValidation/.test(c.url)),
+     escritas.map(c=>c.url.split('apirest.php')[1]).join(' | '));
+  ok('nunca chamou endpoint de aprovacao',
+     !chamadas.some(c=>/\/TicketValidation\/\d+$/.test(c.url) && c.metodo==='PUT' && false) &&
+     !chamadas.some(c=>/approve|validate\?/i.test(c.url)));
+  ok('marcou como entregue na outbox',
+     (await j(await callX('/api/agente/outbox?status=entregue&limite=10'))).acoes.length>0);
+  globalThis.fetch = realFetch;
+}
+
+console.log('\n== 13. TRAVA: o agente nao consegue aprovar nem recusar ==');
+for (const [nome, input] of [
+  ['status (veredito)', {id:1,status:3}],
+  ['is_approved', {id:1,is_approved:1}],
+  ['comment_validation', {id:1,comment_validation:'ok'}],
+  ['validation_date', {id:1,validation_date:'2026-01-01'}],
+  ['users_id_approval', {id:1,users_id_approval:5}],
+]) {
+  let bloqueou=false;
+  try { L.glpi.assertNaoEhAprovacao(input); } catch { bloqueou=true; }
+  ok('bloqueia '+nome, bloqueou);
+}
+ok('permite trocar quem valida', (()=>{ try{L.glpi.assertNaoEhAprovacao({id:1,users_id_validate:9});return true}catch{return false} })());
+
+console.log('\n== 14. matriz x filial ==');
+{
+  const p1 = L.engine.parseTitle('Solicitacao de pagamento : ACME LTDA 11.222.333/0001-81');
+  const p2 = L.engine.parseTitle('Solicitacao de pagamento : ACME LTDA 11.222.333/0002-62');
+  ok('estabelecimentos diferentes tem partyKey diferente', L.engine.partyKey(p1)!==L.engine.partyKey(p2));
+  ok('mesma empresa tem empresaKey igual', L.engine.empresaKey(p1)===L.engine.empresaKey(p2),
+     L.engine.empresaKey(p1)+' vs '+L.engine.empresaKey(p2));
+  ok('empresaKey usa a raiz de 8 digitos', L.engine.empresaKey(p1)==='raiz:11222333', L.engine.empresaKey(p1));
+  const all = L.engine.enrich(JSON.parse((await import('node:fs')).readFileSync('/Users/bruno/orca/projects/Gohacks-N1/data/approvals_full.json','utf8')));
+  const an = L.engine.analyze(all,{now:Date.parse('2026-09-18T15:10:00Z')});
+  const sm = L.engine.summarize(an);
+  ok('filial nova de empresa conhecida vira ESTABELECIMENTO_NOVO, nao BENEFICIARIO_NOVO',
+     (sm.byCode.ESTABELECIMENTO_NOVO||0)>0, sm.byCode.ESTABELECIMENTO_NOVO);
+  ok('ESTABELECIMENTO_NOVO e severidade 1, nao trava o pedido',
+     an.pending.filter(r=>r.findings.some(f=>f.code==='ESTABELECIMENTO_NOVO'))
+       .every(r=>r.findings.find(f=>f.code==='ESTABELECIMENTO_NOVO').severity===1));
+  ok('conflito de grafia continua por raiz+ordem, sem misturar filiais',
+     L.engine.auditRetroativo(all).conflitosDeGrafia.every(c=>
+       new Set(c.grafias.map(g=>g.cnpj.slice(0,12))).size===1));
+}
 
 console.log(`\n${'='.repeat(46)}\nPASS ${pass}  FAIL ${fail}\n${'='.repeat(46)}`);
 process.exit(fail?1:0);

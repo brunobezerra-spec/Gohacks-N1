@@ -4,6 +4,7 @@ import { enrich, analyze, summarize, auditRetroativo, motivosDeRecusa, ACOES, ZO
 import { expandSnapshot } from "./snapshot";
 import { montarContexto, processarFila, montarLotesCAP, acoesDoItem, processar, ACOES_AGENTE, HH_PADRAO } from "./agent";
 import { despachar, validarAcao, TIPOS_PERMITIDOS } from "./outbox";
+import { executar as executarGlpi, credenciaisOk, modo as modoGlpi, assertNaoEhAprovacao } from "./glpi";
 import { NIVEIS_APROVADORES } from "./aprovadores";
 
 // ============================================================================
@@ -435,6 +436,55 @@ async function despacharPendentes(env: any, actor: string | null, tipo?: string,
   return { tentadas: res.length, entregues: res.filter(x => x.entregue).length, resultados: res };
 }
 
+// ---------------------------------------------------------------- execucao no GLPI
+
+const htmlDe = (txt: string) =>
+  "<div>" + String(txt || "").split("\n")
+    .map(l => l.trim() ? `<p>${l.replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string))}</p>` : "")
+    .join("") + "</div>";
+
+// Pega o que esta pronto na outbox e manda o executor agir no GoService.
+// Escopo de piloto vem de env.GLPI_PILOTO_APROVADOR; sem ele, nao age em nada,
+// porque agir na base inteira tem que ser decisao explicita.
+async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string; max?: number; piloto?: string | null }) {
+  const piloto = o.piloto !== undefined ? o.piloto : (env.GLPI_PILOTO_APROVADOR ?? null);
+  const w = ["status = 'pronta'"]; const p: any[] = [];
+  if (o.tipo) { w.push("tipo = ?"); p.push(o.tipo.toUpperCase()); }
+  // CORRIGIR_CADASTRO fica de fora: corrigir CNPJ em cadastro de fornecedor e
+  // ato do Supply/Compras no ERP, nao do agente no chamado.
+  w.push("tipo <> 'CORRIGIR_CADASTRO'");
+  p.push(Math.min(o.max ?? 20, 100));
+  const r = await env.DB.query(
+    `SELECT id, tipo, pedido_id, destinatario, assunto, payload FROM outbox
+     WHERE ${w.join(" AND ")} ORDER BY id LIMIT ?`, p);
+
+  const linhas = r.rows ?? [];
+  const ordens = linhas.map((row: any) => {
+    const pay = JSON.parse(row.payload || "null");
+    return {
+      tipo: row.tipo, validationId: row.pedido_id,
+      html: pay?.corpo ? htmlDe(pay.corpo) : htmlDe(row.assunto ?? ""),
+      novoLogin: row.tipo === "ROTEAR_PARA_ALCADA" ? (pay?.aprovadorSugerido ?? null) : null,
+    };
+  });
+
+  const out = await executarGlpi(env, ordens as any, { piloto });
+
+  for (let i = 0; i < out.resultados.length; i++) {
+    const res = out.resultados[i], linha = linhas[i];
+    if (!linha) continue;
+    const novoStatus = res.status === "executada" ? "entregue" : res.status;
+    await env.DB.exec("UPDATE outbox SET status = ?, despachado_em = ?, resultado = ? WHERE id = ?",
+      [novoStatus, new Date().toISOString(), JSON.stringify(res), linha.id]);
+  }
+  await logAudit(env, actor, null, "execucao_glpi",
+    { modo: out.modo, piloto, total: out.total ?? 0, executadas: out.executadas, erro: out.erro ?? null });
+  return { ...out, piloto,
+    aviso: out.modo === "ensaio"
+      ? "Modo ensaio: montei cada chamada e validei a trava, mas NAO enviei. Para agir de verdade, setar o secret GLPI_MODO=executar."
+      : "Modo executar: as chamadas marcadas como executada foram gravadas no GoService." };
+}
+
 // ---------------------------------------------------------------- MCP
 
 const mcp = defineMcp({
@@ -532,6 +582,21 @@ const mcp = defineMcp({
         ? { premissas: await gravarHH(ctx.env, a), aviso: "Vale a partir da proxima execucao." }
         : { premissas: await lerHH(ctx.env), padrao: HH_PADRAO } },
 
+    { name: "goworker_executar",
+      description: "Manda o agente AGIR no GoService/GLPI: adiciona o acompanhamento de devolucao no chamado, registra a solucao para encerrar o que nao deveria existir, e troca o aprovador quando a alcada esta errada. Sem os secrets GLPI_APP_TOKEN e GLPI_USER_TOKEN nao faz nada; com eles e sem GLPI_MODO=executar roda em ENSAIO, mostrando a chamada exata que faria. O escopo de piloto limita a acao a um aprovador so.",
+      inputSchema: { type: "object", properties: {
+        tipo: { type: "string", description: "restringe a um tipo de acao da outbox" },
+        max: { type: "number", description: "maximo de ordens nesta chamada, ate 100" },
+        piloto: { type: "string", description: "id GLPI do aprovador do piloto; sem isso usa env.GLPI_PILOTO_APROVADOR" } } },
+      handler: async (a: any, ctx: any) => executarNoGlpi(ctx.env, ctx.userEmail, { tipo: a.tipo, max: a.max, piloto: a.piloto }) },
+
+    { name: "goworker_status_execucao",
+      description: "Diz se o agente tem credencial de escrita no GoService, em que modo esta (ensaio ou executar), qual o escopo de piloto, e qual o limite estrutural: nenhum caminho do app consegue aprovar ou recusar um pagamento.",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_a, ctx: any) => ({
+        credenciais: credenciaisOk(ctx.env) ? "configuradas" : "FALTANDO",
+        modo: modoGlpi(ctx.env), piloto: ctx.env.GLPI_PILOTO_APROVADOR ?? null }) },
+
     { name: "goworker_registrar_decisao",
       description: "Registra na trilha de auditoria o que um humano decidiu sobre um pedido. NAO aprova nem recusa no GoService: este agente nao tem permissao de escrita no GLPI, por desenho. Serve para o agente saber o que ja foi tratado.",
       inputSchema: { type: "object", properties: {
@@ -622,6 +687,21 @@ export default {
       if (path === "/api/agente/despachar" && request.method === "POST") {
         const b: any = await request.json().catch(() => ({}));
         return json(await despacharPendentes(env, actor, b.tipo, Number(b.max ?? 25)));
+      }
+      if (path === "/api/agente/executar" && request.method === "POST") {
+        const b: any = await request.json().catch(() => ({}));
+        return json(await executarNoGlpi(env, actor, { tipo: b.tipo, max: b.max, piloto: b.piloto }));
+      }
+      if (path === "/api/agente/execucao") {
+        return json({
+          credenciais: credenciaisOk(env) ? "configuradas" : "FALTANDO (GLPI_APP_TOKEN e GLPI_USER_TOKEN)",
+          modo: modoGlpi(env),
+          piloto: env.GLPI_PILOTO_APROVADOR ?? null,
+          explicacao: modoGlpi(env) === "ensaio"
+            ? "Em ensaio o agente monta a chamada, valida a trava e nao envia. Setar GLPI_MODO=executar para agir."
+            : "O agente esta escrevendo no GoService.",
+          limite: "Nenhum caminho deste app escreve status, is_approved ou comment_validation em TicketValidation. Aprovar e recusar sao do aprovador com alcada (Art. 7).",
+        });
       }
       if (path === "/api/agente/lotes") {
         const sm: any = await lastSummary(env);

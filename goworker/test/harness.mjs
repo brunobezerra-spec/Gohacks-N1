@@ -94,9 +94,9 @@ const rpc = async (method, params) => j(await call('/_mcp', { method:'POST',
 let m = await rpc('initialize', { protocolVersion:'2025-06-18' });
 ok('initialize', m.result?.protocolVersion === '2025-06-18', JSON.stringify(m).slice(0,200));
 m = await rpc('tools/list', {});
-ok('16 ferramentas', m.result?.tools?.length === 16, m.result?.tools?.length);
+ok('18 ferramentas', m.result?.tools?.length === 18, m.result?.tools?.length);
 ok('nomes corretos', m.result.tools.map(t=>t.name).sort().join(',') ===
-  'goworker_agente_fila,goworker_agente_parecer,goworker_agente_resumo,goworker_auditoria_retroativa,goworker_despachar,goworker_dossie,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_lotes_cap,goworker_motivos_de_recusa,goworker_outbox,goworker_premissas_hh,goworker_registrar_decisao,goworker_resumo,goworker_tipos_de_alto_risco',
+  'goworker_agente_fila,goworker_agente_parecer,goworker_agente_resumo,goworker_auditoria_retroativa,goworker_despachar,goworker_dossie,goworker_executar,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_lotes_cap,goworker_motivos_de_recusa,goworker_outbox,goworker_premissas_hh,goworker_registrar_decisao,goworker_resumo,goworker_status_execucao,goworker_tipos_de_alto_risco',
   m.result?.tools?.map(t=>t.name).join(','));
 m = await rpc('tools/call', { name:'goworker_auditoria_retroativa', arguments:{} });
 { const A = m.result?.structuredContent;
@@ -120,41 +120,42 @@ ok('avisa que nao escreve no GoService',
 m = await rpc('tools/call', { name:'inexistente', arguments:{} });
 ok('ferramenta inexistente = erro JSON-RPC', m.error?.code === -32602);
 
-console.log('\n== 8. SEGURANCA: nenhum caminho de escrita no GoService ==');
+console.log('\n== 8. SEGURANCA: o agente escreve, mas nao decide ==');
 {
   const src = (await import('node:fs')).readFileSync('/tmp/bundle.js','utf8');
-  // O snapshot e DADO (inclui texto escrito por usuarios no GLPI, que pode conter
-  // qualquer palavra). A verificacao tem que olhar CODIGO, entao ele sai primeiro,
-  // junto com comentarios.
-  // esbuild reformata o literal, entao recortamos por indice: do inicio do
-  // SNAPSHOT ate a funcao que o expande.
   const ini = src.indexOf('SNAPSHOT =');
   const fim = src.indexOf('expandSnapshot', ini);
   const semDados = ini >= 0 && fim > ini ? src.slice(0, ini) + src.slice(fim) : src;
   const code = semDados.replace(/\/\*[\s\S]*?\*\//g,'')
     .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
 
-  ok('snapshot foi isolado antes da checagem', semDados.length < src.length * 0.5,
-     `${semDados.length} vs ${src.length}`);
-  ok('nao referencia review_approval', !/review_approval/.test(code));
-  ok('nenhum endpoint GLPI/GoService no codigo', !/apirest|TicketValidation|\/Ticket\//i.test(code),
-     (code.match(/apirest|TicketValidation/ig)||[]).slice(0,3).join(','));
-  // A prova mais forte: o worker nao faz NENHUMA chamada de rede para fora.
-  // O agente agora DESPACHA acoes, entao ele chama fetch. A garantia deixou de
-  // ser "nao chama rede" e passou a ser mais forte e mais verdadeira:
-  // existe exatamente UMA chamada de rede, ela so vai para o webhook configurado
-  // em runtime, e os tipos que podem passar por ela sao uma lista fechada sem
-  // nenhum ato de aprovacao.
-  const chamadas = (code.match(/\bfetch\s*\(/g) || []).length
-                 - (code.match(/async\s+fetch\s*\(/g) || []).length;
-  ok('existe exatamente uma chamada de rede no app', chamadas === 1,
-     `${chamadas}: ` + (code.match(/.{0,45}[^c]\bfetch\s*\(.{0,30}/g)||[]).slice(0,3).join(' | '));
-  ok('a unica chamada de rede vai para env.OUTBOX_WEBHOOK_URL, nunca uma URL fixa',
-     /fetch\s*\(\s*String\s*\(\s*url\s*\)/.test(code) && !/["'`]https?:\/\//.test(code));
-  ok('o despachador exige https', /\^https:\\\/\\\//.test(code) || code.includes('webhook precisa ser https'));
-  ok('nao usa XMLHttpRequest nem WebSocket', !/XMLHttpRequest|new WebSocket/.test(code));
-  ok('nenhuma URL http(s) externa no codigo', !/["'`]https?:\/\//.test(code),
-     (code.match(/["'`]https?:\/\/[^"'`]{0,40}/g)||[]).slice(0,3).join(' | '));
+  ok('snapshot isolado antes da checagem', semDados.length < src.length * 0.5);
+
+  // O app AGORA escreve no GLPI de proposito. A garantia nao e mais "nao toca
+  // em rede": e que ele nao consegue tomar a decisao de pagamento.
+  ok('nunca chama review_approval do MCP', !/review_approval/.test(code));
+
+  // 1. Um unico host externo.
+  const hosts = [...new Set((code.match(/https?:\/\/[a-z0-9.-]+/gi) || []).map(h => h.toLowerCase()))];
+  ok('um unico host externo, o proprio GoService',
+     hosts.length === 1 && hosts[0] === 'https://goservice.gocase.com.br', hosts.join(', '));
+
+  // 2. Escrita so nos tres endpoints necessarios.
+  const escritas = [...new Set((code.match(/\$\{GLPI_BASE\}\/[A-Za-z]+/g) || []))];
+  ok('endpoints do GLPI restritos ao necessario',
+     escritas.every(e => /initSession|killSession|ITILFollowup|ITILSolution|TicketValidation|search/.test(e)),
+     escritas.join(', '));
+
+  // 3. A trava de veredito existe e roda antes de montar a requisicao.
+  ok('existe trava de campos de veredito', /CAMPOS_DE_VEREDITO/.test(code));
+  for (const campo of ['status','is_approved','comment_validation','validation_date','users_id_approval'])
+    ok('trava cobre o campo ' + campo, code.includes(`"${campo}"`) || code.includes(`'${campo}'`));
+  ok('a trava e chamada antes de trocar o aprovador', /assertNaoEhAprovacao\s*\(\s*input\s*\)/.test(code));
+
+  // 4. Executar exige credencial E modo explicito.
+  ok('modo padrao e ensaio, executar precisa ser ligado no secret',
+     /GLPI_MODO\s*===\s*"executar"/.test(code) || code.includes('GLPI_MODO === "executar"'));
+  ok('sem credencial nao ha sessao', /credenciaisOk/.test(code));
 }
 
 console.log('\n== 9. re-run e idempotencia ==');
