@@ -94,9 +94,9 @@ const rpc = async (method, params) => j(await call('/_mcp', { method:'POST',
 let m = await rpc('initialize', { protocolVersion:'2025-06-18' });
 ok('initialize', m.result?.protocolVersion === '2025-06-18', JSON.stringify(m).slice(0,200));
 m = await rpc('tools/list', {});
-ok('18 ferramentas', m.result?.tools?.length === 18, m.result?.tools?.length);
+ok('19 ferramentas', m.result?.tools?.length === 19, m.result?.tools?.length);
 ok('nomes corretos', m.result.tools.map(t=>t.name).sort().join(',') ===
-  'goworker_agente_fila,goworker_agente_parecer,goworker_agente_resumo,goworker_auditoria_retroativa,goworker_despachar,goworker_dossie,goworker_executar,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_lotes_cap,goworker_motivos_de_recusa,goworker_outbox,goworker_premissas_hh,goworker_registrar_decisao,goworker_resumo,goworker_status_execucao,goworker_tipos_de_alto_risco',
+  'goworker_agente_fila,goworker_agente_parecer,goworker_agente_resumo,goworker_auditoria_retroativa,goworker_despachar,goworker_diagnostico_de_perfil,goworker_dossie,goworker_executar,goworker_fila,goworker_filas_orfas,goworker_gargalos,goworker_lotes_cap,goworker_motivos_de_recusa,goworker_outbox,goworker_premissas_hh,goworker_registrar_decisao,goworker_resumo,goworker_status_execucao,goworker_tipos_de_alto_risco',
   m.result?.tools?.map(t=>t.name).join(','));
 m = await rpc('tools/call', { name:'goworker_auditoria_retroativa', arguments:{} });
 { const A = m.result?.structuredContent;
@@ -143,7 +143,7 @@ console.log('\n== 8. SEGURANCA: o agente escreve, mas nao decide ==');
   // 2. Escrita so nos tres endpoints necessarios.
   const escritas = [...new Set((code.match(/\$\{GLPI_BASE\}\/[A-Za-z]+/g) || []))];
   ok('endpoints do GLPI restritos ao necessario',
-     escritas.every(e => /initSession|killSession|ITILFollowup|ITILSolution|TicketValidation|search/.test(e)),
+     escritas.every(e => /initSession|killSession|changeActiveProfile|getActiveProfile|ITILFollowup|ITILSolution|TicketValidation|search/.test(e)),
      escritas.join(', '));
 
   // 3. A trava de veredito existe e roda antes de montar a requisicao.

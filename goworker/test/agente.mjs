@@ -130,7 +130,7 @@ ok('aviso de que sao premissas', /PREMISSAS|premissas/i.test(hh.aviso));
 console.log('\n== 11. ferramentas MCP do agente ==');
 let m=await rpc('tools/list',{});
 const nomes=m.result.tools.map(t=>t.name);
-ok('18 ferramentas', nomes.length===18, nomes.length);
+ok('19 ferramentas', nomes.length===19, nomes.length);
 for (const t of ['goworker_agente_resumo','goworker_agente_fila','goworker_agente_parecer',
                  'goworker_outbox','goworker_despachar','goworker_lotes_cap','goworker_premissas_hh'])
   ok('expoe '+t, nomes.includes(t));

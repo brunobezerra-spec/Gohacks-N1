@@ -55,7 +55,8 @@ export function assertNaoEhAprovacao(input: Record<string, unknown>) {
   }
 }
 
-export type GlpiEnv = { GLPI_APP_TOKEN?: string; GLPI_USER_TOKEN?: string; GLPI_MODO?: string; GLPI_PILOTO_APROVADOR?: string };
+export type GlpiEnv = { GLPI_APP_TOKEN?: string; GLPI_USER_TOKEN?: string; GLPI_MODO?: string;
+  GLPI_PILOTO_APROVADOR?: string; GLPI_PERFIL_ID?: string };
 
 export function credenciaisOk(env: GlpiEnv) {
   return Boolean(env.GLPI_APP_TOKEN && env.GLPI_USER_TOKEN);
@@ -70,13 +71,53 @@ export function modo(env: GlpiEnv) {
   return (v === "on" || v === "executar" || v === "ligado") ? "executar" : "ensaio";
 }
 
+// O GLPI abre a sessao no perfil PADRAO do usuario. Como o agente precisa de um
+// perfil proprio (o unico com "Ver: todos os chamados"), ele troca o perfil
+// ativo explicitamente. Assim ninguem precisa mexer no perfil padrao da pessoa,
+// e o perfil do agente fica visivel na trilha do GLPI.
 async function initSession(env: GlpiEnv) {
   const res = await fetch(`${GLPI_BASE}/initSession`, {
     headers: { "App-Token": env.GLPI_APP_TOKEN!, Authorization: `user_token ${env.GLPI_USER_TOKEN}` },
   });
   const data: any = await res.json().catch(() => ({}));
   if (!data?.session_token) throw new Error(`initSession falhou: HTTP ${res.status} ${JSON.stringify(data).slice(0, 200)}`);
-  return data.session_token as string;
+  const session = data.session_token as string;
+
+  const perfil = Number(env.GLPI_PERFIL_ID ?? 0);
+  if (perfil > 0) {
+    const r = await fetch(`${GLPI_BASE}/changeActiveProfile`, {
+      method: "POST",
+      headers: { "App-Token": env.GLPI_APP_TOKEN!, "Session-Token": session, "Content-Type": "application/json" },
+      body: JSON.stringify({ profiles_id: perfil }),
+    });
+    if (!r.ok) console.log(`[glpi] nao consegui trocar para o perfil ${perfil}: HTTP ${r.status}`);
+  }
+  return session;
+}
+
+// Diz em que perfil o agente esta e se ele enxerga todos os chamados.
+// READALL = bit 1024 do direito "ticket". Sem ele, o agente so ve os chamados
+// dos grupos a que o usuario pertence, que hoje sao ~7% da fila.
+export const READALL = 1024;
+export async function diagnosticoDePerfil(env: GlpiEnv) {
+  if (!credenciaisOk(env)) return { erro: "sem credencial" };
+  const session = await initSession(env);
+  try {
+    const r = await fetch(`${GLPI_BASE}/getActiveProfile`, {
+      headers: { "App-Token": env.GLPI_APP_TOKEN!, "Session-Token": session } });
+    const d: any = await r.json().catch(() => ({}));
+    const p = d?.active_profile ?? {};
+    const t = Number(p.ticket ?? 0);
+    return {
+      perfilAtivo: { id: p.id, nome: p.name },
+      direitoTicket: t,
+      veTodosOsChamados: Boolean(t & READALL),
+      direitoFollowup: p.followup ?? null,
+      alcance: (t & READALL)
+        ? "O agente enxerga todos os chamados."
+        : "O agente so enxerga chamados dos grupos do usuario. Falta marcar 'Ver: todos' no perfil.",
+    };
+  } finally { await killSession(env, session); }
 }
 async function killSession(env: GlpiEnv, session: string) {
   await fetch(`${GLPI_BASE}/killSession`, {

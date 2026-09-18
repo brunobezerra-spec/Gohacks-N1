@@ -4,7 +4,7 @@ import { enrich, analyze, summarize, auditRetroativo, motivosDeRecusa, ACOES, ZO
 import { expandSnapshot } from "./snapshot";
 import { montarContexto, processarFila, montarLotesCAP, acoesDoItem, processar, ACOES_AGENTE, HH_PADRAO } from "./agent";
 import { despachar, validarAcao, TIPOS_PERMITIDOS } from "./outbox";
-import { executar as executarGlpi, credenciaisOk, modo as modoGlpi, assertNaoEhAprovacao } from "./glpi";
+import { executar as executarGlpi, credenciaisOk, modo as modoGlpi, assertNaoEhAprovacao, diagnosticoDePerfil } from "./glpi";
 import { NIVEIS_APROVADORES } from "./aprovadores";
 
 // ============================================================================
@@ -623,6 +623,11 @@ const mcp = defineMcp({
         piloto: { type: "string", description: "id GLPI do aprovador do piloto; sem isso usa env.GLPI_PILOTO_APROVADOR" } } },
       handler: async (a: any, ctx: any) => executarNoGlpi(ctx.env, ctx.userEmail, { tipo: a.tipo, max: a.max, piloto: a.piloto }) },
 
+    { name: "goworker_diagnostico_de_perfil",
+      description: "Abre uma sessao no GoService e diz em que perfil do GLPI o agente esta, qual o bitmask do direito de chamado, e se ele enxerga TODOS os chamados (bit READALL = 1024) ou so os dos grupos do usuario. E a checagem para saber se o agente consegue trabalhar a fila inteira ou so uma fatia.",
+      inputSchema: { type: "object", properties: {} },
+      handler: async (_a, ctx: any) => diagnosticoDePerfil(ctx.env) },
+
     { name: "goworker_status_execucao",
       description: "Diz se o agente tem credencial de escrita no GoService, em que modo esta (ensaio ou executar), qual o escopo de piloto, e qual o limite estrutural: nenhum caminho do app consegue aprovar ou recusar um pagamento.",
       inputSchema: { type: "object", properties: {} },
@@ -724,6 +729,10 @@ export default {
       if (path === "/api/agente/executar" && request.method === "POST") {
         const b: any = await request.json().catch(() => ({}));
         return json(await executarNoGlpi(env, actor, { tipo: b.tipo, max: b.max, piloto: b.piloto }));
+      }
+      if (path === "/api/agente/perfil") {
+        try { return json(await diagnosticoDePerfil(env)); }
+        catch (e: any) { return json({ erro: e?.message ?? String(e) }, 500); }
       }
       if (path === "/api/agente/execucao") {
         return json({
