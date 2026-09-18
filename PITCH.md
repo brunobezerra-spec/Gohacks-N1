@@ -55,6 +55,11 @@ olha o que exige julgamento.
 *Honestidade:* só a fila do financeiro está medida. Estender às outras filas de aprovação do
 Gogroup é tese, não dado.
 
+**Conformidade:** o agente foi construído contra a Política Corporativa de Pagamentos
+(rev. 01, 01/07/2025) e o Playbook Fiscal gobeaute, artigo por artigo. O mapa completo está
+em `CONFORMIDADE.md`, incluindo um conflito normativo que precisa de decisão humana: a
+Política manda pagar nos dias 10/20/30, o playbook fiscal descreve quartas e sextas.
+
 ## 4. O que a PoC achou
 
 | Achado | Quantidade | Por que importa |
@@ -86,42 +91,64 @@ custa **37 edições de cadastro**, não 162.
 
 ## 5. O que o Goworker faz
 
-Assume a **fila**, nunca a **assinatura**. Roda todo dia e devolve uma ação por pedido parado:
+Ele é o **dono do fluxo de pagamento**, entre o solicitante e o diretor aprovador.
+Todo dia lê a base inteira e toma **uma decisão por pedido**. Não sugere: decide e executa.
 
-| Ação | Hoje | O que significa |
+| Ação do agente | Hoje | Quem fica com a bola |
 |---|---|---|
-| **CONFIRMAR** | 534 | Velho demais; reconfirmar ou encerrar |
-| **LIBERAR** | 319 | Limpo, com dossiê pronto para um clique |
-| **ARQUIVAR** | 106 | Ticket de teste, não é pedido real |
-| **REVISAR** | 36 | Pendência de cadastro antes de decidir |
-| **REDIRECIONAR** | 35 | O aprovador sumiu; trocar o dono da fila |
-| **BLOQUEAR** | 28 | Documento inválido, autoaprovação ou beneficiário trocado |
+| **ENCAMINHAR** | 491 | aprovador — instruído, com dossiê e alçada conferida |
+| **RECOMENDAR_ESTORNO** | 383 | contas a pagar — Art. 11, parado há mais de 120 dias |
+| **ENCERRAR** | 119 | ninguém — teste, despesa pré-aprovada ou intercompany |
+| **DEVOLVER** | 57 | solicitante — com a mensagem já escrita |
+| **CORRIGIR_E_ENCAMINHAR** | 8 | agente — ele conserta e o pedido segue |
 
-**425 pedidos (40%) saem da fila sem consumir julgamento humano.**
-**99 mudam de destino em vez de virar carimbo.**
-**739 (70%) não podem ser decididos como estão** — e o agente diz por quê, um a um.
+**559 pedidos (53%) nunca chegam a consumir tempo de diretor.**
+E ele emitiu **621 ações concretas** nesta execução: 440 mensagens redigidas,
+32 reroteamentos por alçada, 26 notificações de penalidade, 4 correções de cadastro
+aplicadas sozinho, 119 encerramentos.
 
-### Como ele ordena, já que não existe valor em reais
+### Ele escreve, com nome e artigo
 
-A classe do pedido é o único proxy de materialidade que sobrevive à correção de Bonferroni
-para 13 comparações:
+Devolução real gerada pelo agente, para um solicitante nominal:
 
-| Classe | Decididos | Recusados | Lift bruto | Lift encolhido | p ajustado |
-|---|---|---|---|---|---|
-| `novo_servico` | 18 | 4 | 26,1× | **7,6×** | 1,9e-4 |
-| `compra` | 286 | 11 | 4,5× | **4,0×** | 5,6e-4 |
-| `estorno` | 974 | 21 | 2,5× | **2,5×** | 1,8e-3 |
+> **Para:** rogerio.azbuy
+> **Assunto:** [Goworker] Pedido #12634 devolvido para ajuste
+>
+> A solicitação de pagamento #12634 não pode seguir para aprovação ainda. Encontrei 2 pontos que preciso que você ajuste:
+>
+> 1. Você informou o CNPJ de AZBUY COMERCIO LTDA, que é uma empresa do nosso grupo, no campo do fornecedor. Corrija para o CNPJ real de "Receita Federal".
+>    Base: Política Corporativa de Pagamentos, Anexo I.
+> 2. Este pagamento tem juros ou multa. Registre a justificativa do atraso e a área responsável antes de seguir.
+>    Base: Política Corporativa de Pagamentos, Art. 12.
+>
+> *Esta mensagem foi gerada e enviada por um agente. A decisão de aprovar ou recusar continua sendo humana.*
 
-O lift encolhido usa prior bayesiano de 50 observações: 26× vindo de 18 casos não é 26×.
-A prioridade (0 a 100) combina gravidade do achado, esse lift e, por último, idade.
-**Ordenar só por idade, como estava antes do red team, era pior.**
+### Ele conhece a alçada
+
+Cruzando o Art. 7 com o cargo real de 36 aprovadores no Teamguide:
+**6 aprovadores são analista ou coordenador e não têm alçada nenhuma pela política.**
+Um deles é o mesmo `antonio.mendes` que aparece se autoaprovando — e é estagiário de FP&A.
+
+### Ele já entrega contas a pagar pronto
+
+Para os 491 que passarem na aprovação, o agente já montou o lote:
+data de pagamento pelo ciclo do Art. 9 (dias 10, 20 e 30), respeitando os 5 dias úteis
+do Art. 8 (2 de lançamento fiscal + 3 de programação), forma PIX do Art. 10.
+O CAP não digita: confere e libera.
+
+**Horas de trabalho humano substituídas nesta execução: 321h.** Esse é o único número
+do projeto que não sai do dado — são premissas de minutos por atividade, declaradas e
+editáveis via API e MCP. Calibrar com o time de CAP antes de virar número oficial.
 
 ## 6. O que ele não faz, de propósito
 
-**Não tem credencial de escrita no GLPI. Não chama `fetch()` em lugar nenhum.**
-Não aprova, não recusa, não paga. Isso é desenho, não falta de tempo: segregação de função é
-o controle que o financeiro não pode perder, e um agente que assina cheque destrói esse
-controle. Seis testes automatizados provam que não há caminho de escrita no bundle publicado.
+**Não aprova, não recusa, não paga.** A lista de ações que ele consegue emitir é **fechada
+em 7 tipos**, e a trava recusa qualquer ato de aprovação *antes* de qualquer chamada de rede.
+O despacho só sai para o webhook configurado em runtime, nunca para uma URL fixa.
+
+Isso é desenho, não falta de tempo. O **Art. 4 da Política chama segregação de funções de
+regra inviolável**. Um agente que assina destrói exatamente o controle que ele existe para
+proteger. Ele tira do humano tudo que não é a decisão; a decisão continua humana.
 
 ## 7. A pergunta difícil, respondida antes de ser feita
 
@@ -189,19 +216,21 @@ com documento inválido por mês, e pedidos que chegam à mesa humana já com do
 
 ## Roteiro de demo (4 minutos)
 
-1. Dashboard: 1.058 parados, mediana 91 dias, 37 cadastros inválidos pagos 162 vezes.
+1. Console do agente: 621 ações emitidas, 53% da fila resolvida sem consumir diretor.
 2. Tabela da SEFAZ: três grafias, duas inválidas, 88 aprovados. Refazer o módulo 11 ao vivo.
 3. Tabela dos 152 motivos de recusa: 54 dependem de campos que o agente não pode ler.
-4. Filtrar BLOQUEAR e abrir o dossiê da autoaprovação do `antonio.mendes`.
+4. Abrir o parecer do agente na autoaprovação do `antonio.mendes`: violação do Art. 4, a
+   mensagem que ele escreveu, e o fato de que quem aprovava não tinha alçada.
 5. `/_mcp`: perguntar ao Claude "como está a fila do financeiro" e ele responde pelo agente.
 
 ## O que está rodando
 
-- Motor de 14 regras + priorização com encolhimento bayesiano, calibrado contra 18.926 registros
+- Motor de política com os artigos da Política de Pagamentos codificados, mais 14 regras de
+  higiene de dado calibradas contra 18.926 registros
 - Auditoria retroativa de documentos inválidos já aprovados e taxonomia dos 152 motivos de recusa
-- 9 ferramentas MCP em `/_mcp`, execução automática diária via cron
-- **94 testes** (67 de integração + 27 de dashboard em DOM real), incluindo 6 de segregação de
-  função e 11 de regressão dos achados do red team
+- 16 ferramentas MCP em `/_mcp`, execução automática diária via cron
+- **172 testes** (69 de integração + 62 do agente + 41 de dashboard em DOM real), incluindo
+  a trava que prova que nenhum ato de aprovação atravessa a outbox
 
 ## Como este pitch foi checado
 

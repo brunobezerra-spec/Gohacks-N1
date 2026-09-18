@@ -1,7 +1,14 @@
 # Goworker do Financeiro
 
-Funcionário de IA que assume a **fila** de aprovação de pagamentos do GoService/GLPI.
-Nunca assume a **assinatura**.
+Funcionário de IA que é **dono do fluxo de pagamento** do Gogroup, entre o solicitante e o
+diretor aprovador. Filtra o que não deve passar, corrige o que é corrigível, devolve o que
+não é, e entrega ao aprovador só o que já está instruído. Depois de aprovado, monta o lote
+de contas a pagar.
+
+Nunca assume a **assinatura**: o Art. 4 da Política Corporativa de Pagamentos chama
+segregação de funções de regra inviolável.
+
+Mapa de conformidade artigo por artigo: [CONFORMIDADE.md](CONFORMIDADE.md).
 
 App: https://goworker-financeiro.devgogroup.com
 
