@@ -548,8 +548,8 @@ export function analyze(all, opts = {}) {
       const irmaos = (byObrigacao.get(r.obrigacaoKey) || []).filter(o => o.id !== r.id);
       const aprovados = irmaos.filter(o => o.status === 'Aprovado');
       const parados = irmaos.filter(o => o.status === 'Aguardando');
-      if (aprovados.length) findings.push({ code: 'DUPLICIDADE_JA_APROVADA', severity: 3,
-        msg: `Mesmo beneficiario, mesmo valor (R$ ${r.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) e mesmo vencimento (${r.vencimento}) de um pedido JA APROVADO (id ${aprovados[aprovados.length-1].id}). Risco de pagar duas vezes.`,
+      if (aprovados.length) findings.push({ code: 'DUPLICIDADE_JA_APROVADA', severity: 1,
+        msg: `Existe pedido JA APROVADO (id ${aprovados[aprovados.length-1].id}) com o mesmo beneficiario, o mesmo valor (R$ ${r.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) e o mesmo vencimento (${r.vencimento}). ATENCAO ao ler isto: no historico, 96% dos grupos com esse padrao tiveram TODOS os pedidos aprovados, ou seja, quase sempre e cobranca recorrente de valor fixo, nao duplicata. Sem o numero da nota fiscal nao da para separar os dois casos.`,
         evidence: aprovados.slice(0, 5).map(o => ({ id: o.id, ticketId: o.ticketId, status: o.status })) });
       else if (parados.length) findings.push({ code: 'DUPLICIDADE_NA_FILA', severity: 2,
         msg: `${parados.length + 1} pedidos com o mesmo beneficiario, valor e vencimento estao parados ao mesmo tempo.`,
@@ -634,11 +634,11 @@ export function analyze(all, opts = {}) {
 
 // ---------------------------------------------------------------- recomendacao
 
-const BLOQUEIO   = new Set(['CNPJ_INVALIDO', 'CPF_INVALIDO', 'BENEFICIARIO_SO_RECUSADO', 'NOME_DIVERGE_DO_CNPJ', 'AUTOAPROVACAO', 'DUPLICIDADE_JA_APROVADA']);
+const BLOQUEIO   = new Set(['CNPJ_INVALIDO', 'CPF_INVALIDO', 'BENEFICIARIO_SO_RECUSADO', 'NOME_DIVERGE_DO_CNPJ', 'AUTOAPROVACAO']);
 const ARQUIVO    = new Set(['REGISTRO_DE_TESTE']);
 const REDIRECIONA= new Set(['APROVADOR_INATIVO']);
 // Severidade 2 que fala de CADASTRO (nao de idade): resolve-se corrigindo dado.
-const CADASTRO   = new Set(['BENEFICIARIO_NOVO', 'BENEFICIARIO_ALTA_RECUSA', 'SEM_BENEFICIARIO', 'VALOR_NO_TITULO', 'DOCUMENTO_VENCIDO', 'DUPLICIDADE_NA_FILA']);
+const CADASTRO   = new Set(['BENEFICIARIO_NOVO', 'BENEFICIARIO_ALTA_RECUSA', 'SEM_BENEFICIARIO', 'VALOR_NO_TITULO', 'DOCUMENTO_VENCIDO']);
 
 export const ACOES = {
   BLOQUEAR:     { label: 'Bloquear e corrigir cadastro', ordem: 1 },
@@ -702,7 +702,9 @@ export function summarize(analysis) {
     oldestDays: ages.length ? Math.round(ages[ages.length-1]) : null,
     medianAgeDays: ages.length ? Math.round(ages[Math.floor(ages.length/2)]) : null,
     valorParado: p.reduce((s, r) => s + (r.valor ?? 0), 0),
-    valorComDuplicidade: p.filter(r => r.findings.some(f => f.code === 'DUPLICIDADE_JA_APROVADA'))
+    // NAO chamar isto de "valor em duplicidade": o back-test mostrou que 96%
+    // desses casos eram cobranca recorrente legitima. E o valor sob o SINAL.
+    valorSobSinalDeRepeticao: p.filter(r => r.findings.some(f => f.code === 'DUPLICIDADE_JA_APROVADA'))
       .reduce((s, r) => s + (r.valor ?? 0), 0),
     pedidosComValor: p.filter(r => r.valor !== null).length,
     tiposDeAltoRisco: [...analysis.kindRisk.porKind.values()].filter(k => k.significativo)

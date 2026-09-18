@@ -111,9 +111,22 @@ export const REGRAS: Record<string, Regra> = {
     nota: "Desligado junto com os tres sinais de beneficiario: tambem e checagem de historico, nao de cadastro." },
 
   // ---- sinais que o motor emite e o handoff nao lista; ficam como leitura
-  DUPLICIDADE_JA_APROVADA: { sinal: "DUPLICIDADE_JA_APROVADA", ativo: true, severidade: "TRAVA",
-    nota: "Nao estava no handoff porque so passou a existir quando o valor e o vencimento ficaram legiveis. " +
-          "Mesmo beneficiario, mesmo centavo, mesmo vencimento de algo JA APROVADO: risco de pagar duas vezes." },
+  // REBAIXADO de TRAVA para RESSALVA em 18/09/2026, por teste contra o historico.
+  // Eu tinha colocado como TRAVA assumindo que "mesmo beneficiario, mesmo centavo,
+  // mesmo vencimento" fosse duplicata. O back-test derrubou:
+  //   641 grupos historicos ja decididos com esse padrao
+  //   613 (96%) tiveram TODOS os irmaos APROVADOS
+  //    28 (4%) tiveram alguma recusa, e o motivo escrito era "aprovador incorreto"
+  //           ou "solicitante de aprovacao incorreto" -- NUNCA duplicidade
+  // Nenhuma variante calibrada salvou a regra: filtrar por fornecedor pouco
+  // recorrente, por valor acima de R$ 50 mil, por distancia entre submissoes ou
+  // por mesmo dia deu 95% a 100% de "todos aprovados" em todas.
+  // Leitura: cobranca recorrente de valor fixo e o caso NORMAL aqui
+  // (JT SERVICOS 11x R$ 350, STATIX 8x R$ 194,14, MPR 6x R$ 500).
+  // Fica como leitura para o aprovador. Nao trava, nao devolve, nao encerra.
+  DUPLICIDADE_JA_APROVADA: { sinal: "DUPLICIDADE_JA_APROVADA", ativo: true, severidade: "RESSALVA",
+    nota: "Rebaixado por back-test: 96% dos grupos historicos com esse padrao tiveram todos os irmaos aprovados. " +
+          "Sem numero da nota fiscal nao da para separar cobranca recorrente de duplicata." },
   DUPLICIDADE_NA_FILA:     { sinal: "DUPLICIDADE_NA_FILA", ativo: true, severidade: "RESSALVA" },
   DOCUMENTO_VENCIDO:       { sinal: "DOCUMENTO_VENCIDO", ativo: true, severidade: "RESSALVA", base: "CAP Art. 8" },
   INTERCOMPANY:            { sinal: "INTERCOMPANY", ativo: true, severidade: "RESSALVA", base: "CAP Anexo I" },
