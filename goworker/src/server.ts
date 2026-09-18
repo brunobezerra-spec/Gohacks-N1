@@ -24,21 +24,20 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS runs (
      id INTEGER PRIMARY KEY AUTOINCREMENT, ran_at TEXT, source TEXT,
      total_records INTEGER, total_pending INTEGER, summary TEXT)`,
-  `CREATE TABLE IF NOT EXISTS triage (
-     approval_id INTEGER PRIMARY KEY, run_id INTEGER, action TEXT, risk INTEGER,
-     age_days REAL, approver TEXT, codes TEXT, doc TEXT, prioridade INTEGER, kind TEXT)`,
-  `CREATE INDEX IF NOT EXISTS ix_tri_action ON triage(action)`,
-  `CREATE INDEX IF NOT EXISTS ix_tri_approver ON triage(approver)`,
-  // Livro-razao do agente: uma linha por decisao tomada, com a base normativa.
-  `CREATE TABLE IF NOT EXISTS agente_acoes (
-     pedido_id INTEGER PRIMARY KEY, run_id INTEGER, acao TEXT, dono TEXT, porque TEXT,
-     artigos TEXT, minutos INTEGER, idade_dias INTEGER, rerroteado INTEGER, doc TEXT)`,
-  `CREATE INDEX IF NOT EXISTS ix_ag_acao ON agente_acoes(acao)`,
+  // Uma linha por pedido, nao duas. env.DB e RPC: cada statement e uma ida na
+  // rede, e 300 idas por execucao derrubavam a conexao. Colunas so para o que a
+  // API filtra; todo o resto (dossie, violacoes, mensagem, plano de CAP) vai
+  // num JSON so.
+  // DUAS colunas. env.DB e RPC e cada statement e uma ida na rede; com 9 colunas
+  // so cabiam 10 linhas por statement (limite de ~90 variaveis ligadas) e a
+  // execucao fazia 195 idas, o bastante para derrubar a conexao. Com 2 colunas
+  // cabem 30 linhas e sobram 36 statements. O filtro sai por json_extract, que
+  // em 1.058 linhas custa nada.
+  `CREATE TABLE IF NOT EXISTS triage (approval_id INTEGER PRIMARY KEY, doc TEXT)`,
   // Outbox: o que o agente emite para o mundo. Lista fechada de tipos.
   `CREATE TABLE IF NOT EXISTS outbox (
-     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, tipo TEXT, pedido_id INTEGER,
-     destinatario TEXT, assunto TEXT, base_legal TEXT, payload TEXT,
-     status TEXT, criado_em TEXT, despachado_em TEXT, resultado TEXT)`,
+     id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT, pedido_id INTEGER, status TEXT,
+     doc TEXT, despachado_em TEXT, resultado TEXT)`,
   `CREATE INDEX IF NOT EXISTS ix_out_status ON outbox(status)`,
   `CREATE INDEX IF NOT EXISTS ix_out_tipo ON outbox(tipo)`,
   `CREATE TABLE IF NOT EXISTS audit (
@@ -53,7 +52,7 @@ const chunkFor = (cols: number) => Math.max(1, Math.floor(MAX_SQL_VARS / cols));
 
 // env.DB sobrevive a updateApp, entao CREATE TABLE IF NOT EXISTS NAO migra uma
 // tabela cujo formato mudou. Versionamos o schema e recriamos o que e derivado.
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 7;
 
 let ready = false;
 async function init(env: any) {
@@ -67,7 +66,6 @@ async function init(env: any) {
     // approvals, runs e audit sao preservadas.
     console.log(`[schema] migrando ${atual} -> ${SCHEMA_VERSION}: recriando triage`);
     await env.DB.exec("DROP TABLE IF EXISTS triage", []);
-    await env.DB.exec("DROP TABLE IF EXISTS agente_acoes", []);
     await env.DB.exec("DROP TABLE IF EXISTS outbox", []);
   }
   for (const stmt of SCHEMA) await env.DB.exec(stmt, []);
@@ -220,26 +218,6 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   const rid = (await env.DB.query("SELECT MAX(id) AS id FROM runs", [])).rows[0].id;
 
   await env.DB.exec("DELETE FROM triage", []);
-  const COLS = 10, CHUNK = chunkFor(COLS);
-  for (let i = 0; i < a.pending.length; i += CHUNK) {
-    const slice = a.pending.slice(i, i + CHUNK);
-    const ph = slice.map(() => "(?,?,?,?,?,?,?,?,?,?)").join(",");
-    const p: any[] = [];
-    for (const r of slice) {
-      const doc = {
-        action_label: r.actionLabel, why: r.why, kind: r.kind, supplier: r.supplier,
-        cnpj: r.cnpj, title: r.title, liftTipo: r.liftTipo,
-        submitted_at: r.submittedAt ? new Date(r.submittedAt).toISOString().slice(0, 19).replace("T", " ") : null,
-        findings: r.findings, contexto: ctx.get(r.id) ?? {},
-      };
-      p.push(r.id, rid, r.action, r.risk,
-        r.ageDays === null ? null : Math.round(r.ageDays * 10) / 10,
-        r.approver, r.findings.map((f: any) => f.code).join(","), JSON.stringify(doc), r.prioridade, r.kind);
-    }
-    await env.DB.exec(`INSERT INTO triage (approval_id,run_id,action,risk,age_days,approver,codes,doc,prioridade,kind) VALUES ${ph}`, p);
-  }
-  mark("triagem gravada");
-
   // ---- O AGENTE decide e executa. Nao pergunta item a item.
   const hhSalvo = await lerHH(env);
   const ctxAg = montarContexto(all, { agora: Date.now(), niveis: NIVEIS_APROVADORES, hh: hhSalvo });
@@ -247,20 +225,36 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   const lotesCap = montarLotesCAP(ag.itens, ctxAg);
   mark("agente decidiu", { acoes: ag.porAcao, horas: ag.horasEconomizadas });
 
-  await env.DB.exec("DELETE FROM agente_acoes", []);
-  const C1 = chunkFor(10);
-  for (let i = 0; i < ag.itens.length; i += C1) {
-    const sl = ag.itens.slice(i, i + C1);
-    const ph = sl.map(() => "(?,?,?,?,?,?,?,?,?,?)").join(",");
+  // Uma unica gravacao por pedido, juntando motor e agente.
+  const porId = new Map(ag.itens.map((x: any) => [x.id, x]));
+  await env.DB.exec("DELETE FROM triage", []);
+  const CHUNK = 30;
+  for (let i = 0; i < a.pending.length; i += CHUNK) {
+    const sl = a.pending.slice(i, i + CHUNK);
+    const ph = sl.map(() => "(?,?)").join(",");
     const p: any[] = [];
-    for (const x of sl) {
-      p.push(x.id, rid, x.acao, x.dono, x.porque, x.artigosCitados.join(", "),
-        x.minutosEconomizados, x.idadeDias, x.roteamento.precisaRerotear ? 1 : 0,
-        JSON.stringify({ violacoes: x.violacoes, correcoes: x.correcoes, roteamento: x.roteamento,
-          planoCAP: x.planoCAP, mensagem: x.mensagemAoSolicitante, penalidade: x.notificacaoPenalidade }));
+    for (const r of sl) {
+      const x: any = porId.get(r.id) ?? {};
+      p.push(r.id,
+        JSON.stringify({
+          run_id: rid, action: r.action, prioridade: r.prioridade, approver: r.approver,
+          kind: r.kind, codes: r.findings.map((f: any) => f.code).join(","), acao_ag: x.acao ?? null,
+          // motor
+          action_label: r.actionLabel, why: r.why, risk: r.risk, age_days: r.ageDays === null ? null : Math.round(r.ageDays * 10) / 10,
+          supplier: r.supplier, cnpj: r.cnpj, title: r.title, liftTipo: r.liftTipo,
+          submitted_at: r.submittedAt ? new Date(r.submittedAt).toISOString().slice(0, 19).replace("T", " ") : null,
+          findings: r.findings, contexto: ctx.get(r.id) ?? {},
+          // agente
+          ag: x.acao ? { dono: x.dono, porque: x.porque, artigos: x.artigosCitados.join(", "),
+            minutos: x.minutosEconomizados, idadeDias: x.idadeDias,
+            rerroteado: x.roteamento?.precisaRerotear ? 1 : 0,
+            violacoes: x.violacoes, correcoes: x.correcoes, roteamento: x.roteamento,
+            planoCAP: x.planoCAP, mensagem: x.mensagemAoSolicitante, penalidade: x.notificacaoPenalidade } : null,
+        }));
     }
-    await env.DB.exec(`INSERT INTO agente_acoes (pedido_id,run_id,acao,dono,porque,artigos,minutos,idade_dias,rerroteado,doc) VALUES ${ph}`, p);
+    await env.DB.exec(`INSERT INTO triage (approval_id,doc) VALUES ${ph}`, p);
   }
+  mark("pedidos gravados", { linhas: a.pending.length, statements: Math.ceil(a.pending.length / CHUNK) });
 
   // Outbox reconstruida a cada execucao, preservando o que ja foi entregue.
   const entregues = await env.DB.query("SELECT tipo, pedido_id FROM outbox WHERE status = 'entregue'", []);
@@ -268,14 +262,15 @@ async function runAgent(env: any, actor: string | null, source: string, cap = 0)
   await env.DB.exec("DELETE FROM outbox WHERE status <> 'entregue'", []);
   const agora = new Date().toISOString();
   const acoes = ag.itens.flatMap(acoesDoItem).filter((x: any) => !jaEntregue.has(x.tipo + ":" + x.pedidoId));
-  const C2 = chunkFor(9);
+  const C2 = 20;
   for (let i = 0; i < acoes.length; i += C2) {
     const sl = acoes.slice(i, i + C2);
-    const ph = sl.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
+    const ph = sl.map(() => "(?,?,?,?)").join(",");
     const p: any[] = [];
-    for (const x of sl) p.push(rid, x.tipo, x.pedidoId, x.destinatario, x.assunto, x.baseLegal,
-      JSON.stringify(x.payload), "pronta", agora);
-    await env.DB.exec(`INSERT INTO outbox (run_id,tipo,pedido_id,destinatario,assunto,base_legal,payload,status,criado_em) VALUES ${ph}`, p);
+    for (const x of sl) p.push(x.tipo, x.pedidoId, "pronta", JSON.stringify({
+      run_id: rid, destinatario: x.destinatario, assunto: x.assunto,
+      base_legal: x.baseLegal, criado_em: agora, payload: x.payload }));
+    await env.DB.exec(`INSERT INTO outbox (tipo,pedido_id,status,doc) VALUES ${ph}`, p);
   }
   mark("outbox gravada", { acoes: acoes.length });
 
@@ -307,40 +302,42 @@ async function lastSummary(env: any) {
 
 async function queue(env: any, f: { action?: string; approver?: string; code?: string; kind?: string; limit?: number }) {
   const w: string[] = [], p: any[] = [];
-  if (f.action) { w.push("action = ?"); p.push(f.action.toUpperCase()); }
-  if (f.approver) { w.push("approver LIKE ?"); p.push("%" + f.approver.toLowerCase() + "%"); }
-  if (f.code) { w.push("codes LIKE ?"); p.push("%" + f.code.toUpperCase() + "%"); }
-  if (f.kind) { w.push("kind = ?"); p.push(f.kind); }
+  if (f.action) { w.push("json_extract(doc,'$.action') = ?"); p.push(f.action.toUpperCase()); }
+  if (f.approver) { w.push("json_extract(doc,'$.approver') LIKE ?"); p.push("%" + f.approver.toLowerCase() + "%"); }
+  if (f.code) { w.push("json_extract(doc,'$.codes') LIKE ?"); p.push("%" + f.code.toUpperCase() + "%"); }
+  if (f.kind) { w.push("json_extract(doc,'$.kind') = ?"); p.push(f.kind); }
   p.push(Math.min(f.limit ?? 50, 500));
   const r = await env.DB.query(
-    `SELECT approval_id,action,risk,age_days,approver,doc,prioridade,kind
-     FROM triage ${w.length ? "WHERE " + w.join(" AND ") : ""}
-     ORDER BY prioridade DESC, risk DESC, age_days DESC LIMIT ?`, p);
+    `SELECT approval_id, doc FROM triage ${w.length ? "WHERE " + w.join(" AND ") : ""}
+     ORDER BY json_extract(doc,'$.prioridade') DESC LIMIT ?`, p);
   return (r.rows ?? []).map((x: any) => {
     const d = JSON.parse(x.doc || "{}");
-    return { approval_id: x.approval_id, action: x.action, action_label: d.action_label,
-      risk: x.risk, prioridade: x.prioridade, why: d.why, age_days: x.age_days, approver: x.approver,
+    return { approval_id: x.approval_id, action: d.action, action_label: d.action_label,
+      risk: d.risk, prioridade: d.prioridade, why: d.why, age_days: d.age_days, approver: d.approver,
       kind: d.kind, supplier: d.supplier, cnpj: d.cnpj, title: d.title,
-      submitted_at: d.submitted_at, findings: d.findings ?? [] };
+      submitted_at: d.submitted_at, findings: d.findings ?? [],
+      acaoDoAgente: d.acao_ag ?? null };
   });
 }
 
 // O dossie: tudo que o aprovador precisaria juntar na mao para decidir.
 // O contexto pesado ja foi calculado na execucao do agente; aqui e leitura de 1 linha.
 async function dossier(env: any, id: number) {
-  const t = await env.DB.query("SELECT * FROM triage WHERE approval_id = ?", [id]);
+  const t = await env.DB.query("SELECT doc FROM triage WHERE approval_id = ?", [id]);
   if (!t.rows?.length) return null;
-  const row: any = t.rows[0];
-  const d = JSON.parse(row.doc || "{}");
+  const d = JSON.parse(t.rows[0].doc || "{}");
+  const row = { approval_id: id, approver: d.approver, kind: d.kind, prioridade: d.prioridade,
+    action: d.action, acao_ag: d.acao_ag };
   const ctx = d.contexto ?? {};
   const trilha = await env.DB.query(
     "SELECT at, actor, event, detail FROM audit WHERE approval_id = ? ORDER BY id DESC LIMIT 20", [id]);
 
   return {
-    pedido: { id: row.approval_id, titulo: d.title, tipo: d.kind, beneficiario: d.supplier,
-      cnpj: d.cnpj, aprovador: row.approver, submetidoEm: d.submitted_at, paradoHaDias: row.age_days },
-    recomendacao: { acao: row.action, rotulo: d.action_label, porque: d.why, risco: row.risk,
+    pedido: { id: row.approval_id, titulo: d.title, tipo: row.kind, beneficiario: d.supplier,
+      cnpj: d.cnpj, aprovador: row.approver, submetidoEm: d.submitted_at, paradoHaDias: d.age_days },
+    recomendacao: { acao: row.action, rotulo: d.action_label, porque: d.why, risco: d.risk,
       prioridade: row.prioridade, liftDoTipo: d.liftTipo },
+    acaoDoAgente: row.acao_ag ?? null,
     sinais: d.findings ?? [],
     historicoDoBeneficiario: ctx.historicoDoBeneficiario ?? [],
     totalComMesmoTitulo: ctx.totalComMesmoTitulo ?? 0,
@@ -370,23 +367,32 @@ async function gravarHH(env: any, novo: any) {
 
 async function filaAgente(env: any, f: { acao?: string; dono?: string; artigo?: string; limite?: number }) {
   const w: string[] = [], p: any[] = [];
-  if (f.acao) { w.push("acao = ?"); p.push(f.acao.toUpperCase()); }
-  if (f.dono) { w.push("dono LIKE ?"); p.push("%" + f.dono.toLowerCase() + "%"); }
-  if (f.artigo) { w.push("artigos LIKE ?"); p.push("%" + f.artigo + "%"); }
+  if (f.acao) { w.push("json_extract(doc,'$.acao_ag') = ?"); p.push(f.acao.toUpperCase()); }
+  if (f.dono) { w.push("doc LIKE ?"); p.push('%"dono":"%' + f.dono.toLowerCase() + '%'); }
+  if (f.artigo) { w.push("doc LIKE ?"); p.push("%" + f.artigo + "%"); }
   p.push(Math.min(f.limite ?? 50, 500));
   const r = await env.DB.query(
-    `SELECT pedido_id, acao, dono, porque, artigos, minutos, idade_dias, rerroteado
-     FROM agente_acoes ${w.length ? "WHERE " + w.join(" AND ") : ""}
-     ORDER BY idade_dias DESC LIMIT ?`, p);
-  return r.rows ?? [];
+    `SELECT approval_id AS pedido_id, doc FROM triage
+     ${w.length ? "WHERE " + w.join(" AND ") : ""}
+     ORDER BY json_extract(doc,'$.prioridade') DESC LIMIT ?`, p);
+  return (r.rows ?? []).map((x: any) => {
+    const full = JSON.parse(x.doc || "{}");
+    const ag = full.ag ?? {};
+    return { pedido_id: x.pedido_id, acao: full.acao_ag, prioridade: full.prioridade,
+      dono: ag.dono ?? null, porque: ag.porque ?? null, artigos: ag.artigos ?? null,
+      minutos: ag.minutos ?? null, idade_dias: ag.idadeDias ?? null, rerroteado: ag.rerroteado ?? 0 };
+  });
 }
 
 async function parecerAgente(env: any, id: number) {
-  const r = await env.DB.query("SELECT * FROM agente_acoes WHERE pedido_id = ?", [id]);
+  const r = await env.DB.query("SELECT doc FROM triage WHERE approval_id = ?", [id]);
   if (!r.rows?.length) return null;
-  const x: any = r.rows[0];
-  const d = JSON.parse(x.doc || "{}");
-  const t = await env.DB.query("SELECT tipo, destinatario, assunto, base_legal, status FROM outbox WHERE pedido_id = ?", [id]);
+  const row: any = JSON.parse(r.rows[0].doc || "{}");
+  if (!row.acao_ag) return null;
+  const d = row.ag ?? {};
+  const x = { pedido_id: id, acao: row.acao_ag, dono: d.dono, porque: d.porque,
+    artigos: d.artigos, minutos: d.minutos };
+  const t = await env.DB.query("SELECT tipo, status, doc FROM outbox WHERE pedido_id = ?", [id]);
   return {
     pedidoId: x.pedido_id,
     decisao: { acao: x.acao, rotulo: (ACOES_AGENTE as any)[x.acao]?.label ?? x.acao, dono: x.dono, porque: x.porque },
@@ -397,7 +403,8 @@ async function parecerAgente(env: any, id: number) {
     mensagemAoSolicitante: d.mensagem ?? null,
     notificacaoDePenalidade: d.penalidade ?? null,
     planoContasAPagar: d.planoCAP ?? null,
-    acoesEmitidas: t.rows ?? [],
+    acoesEmitidas: (t.rows ?? []).map((a: any) => { const ad = JSON.parse(a.doc || "{}");
+      return { tipo: a.tipo, status: a.status, destinatario: ad.destinatario, base_legal: ad.base_legal }; }),
     minutosEconomizados: x.minutos,
     limite: "O agente não aprova nem recusa. O Art. 7 reserva isso à alçada com competência; o Art. 4 trata segregação de funções como regra inviolável.",
   };
@@ -409,9 +416,13 @@ async function lerOutbox(env: any, f: { tipo?: string; status?: string; limite?:
   if (f.status) { w.push("status = ?"); p.push(f.status); }
   p.push(Math.min(f.limite ?? 50, 300));
   const r = await env.DB.query(
-    `SELECT id, tipo, pedido_id, destinatario, assunto, base_legal, status, criado_em, despachado_em, resultado, payload
+    `SELECT id, tipo, pedido_id, status, doc, despachado_em, resultado
      FROM outbox ${w.length ? "WHERE " + w.join(" AND ") : ""} ORDER BY id DESC LIMIT ?`, p);
-  return (r.rows ?? []).map((x: any) => ({ ...x, payload: JSON.parse(x.payload || "null") }));
+  return (r.rows ?? []).map((x: any) => { const d = JSON.parse(x.doc || "{}");
+    return { id: x.id, tipo: x.tipo, pedido_id: x.pedido_id, status: x.status,
+      destinatario: d.destinatario, assunto: d.assunto, base_legal: d.base_legal,
+      criado_em: d.criado_em, despachado_em: x.despachado_em, resultado: x.resultado,
+      payload: d.payload ?? null }; });
 }
 
 // Despacha o que esta pronto. A trava da outbox recusa qualquer tipo fora da
@@ -421,12 +432,13 @@ async function despacharPendentes(env: any, actor: string | null, tipo?: string,
   if (tipo) { w.push("tipo = ?"); p.push(tipo.toUpperCase()); }
   p.push(Math.min(max, 100));
   const r = await env.DB.query(
-    `SELECT id, tipo, pedido_id, destinatario, assunto, base_legal, payload FROM outbox
+    `SELECT id, tipo, pedido_id, doc FROM outbox
      WHERE ${w.join(" AND ")} ORDER BY id LIMIT ?`, p);
   const res: any[] = [];
   for (const row of (r.rows ?? [])) {
-    const acao = { tipo: row.tipo, pedidoId: row.pedido_id, destinatario: row.destinatario,
-      assunto: row.assunto, payload: JSON.parse(row.payload || "null"), baseLegal: row.base_legal };
+    const d = JSON.parse(row.doc || "{}");
+    const acao = { tipo: row.tipo, pedidoId: row.pedido_id, destinatario: d.destinatario,
+      assunto: d.assunto, payload: d.payload ?? null, baseLegal: d.base_legal };
     const out = await despachar(env, acao as any);
     await env.DB.exec("UPDATE outbox SET status = ?, despachado_em = ?, resultado = ? WHERE id = ?",
       [out.status, new Date().toISOString(), JSON.stringify(out), row.id]);
@@ -455,15 +467,16 @@ async function executarNoGlpi(env: any, actor: string | null, o: { tipo?: string
   w.push("tipo <> 'CORRIGIR_CADASTRO'");
   p.push(Math.min(o.max ?? 20, 100));
   const r = await env.DB.query(
-    `SELECT id, tipo, pedido_id, destinatario, assunto, payload FROM outbox
+    `SELECT id, tipo, pedido_id, doc FROM outbox
      WHERE ${w.join(" AND ")} ORDER BY id LIMIT ?`, p);
 
   const linhas = r.rows ?? [];
   const ordens = linhas.map((row: any) => {
-    const pay = JSON.parse(row.payload || "null");
+    const dd = JSON.parse(row.doc || "{}");
+    const pay = dd.payload ?? null;
     return {
       tipo: row.tipo, validationId: row.pedido_id,
-      html: pay?.corpo ? htmlDe(pay.corpo) : htmlDe(row.assunto ?? ""),
+      html: pay?.corpo ? htmlDe(pay.corpo) : htmlDe(dd.assunto ?? ""),
       novoLogin: row.tipo === "ROTEAR_PARA_ALCADA" ? (pay?.aprovadorSugerido ?? null) : null,
     };
   });

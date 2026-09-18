@@ -231,7 +231,7 @@ console.log('\n== 11. migracao de schema antigo (env.DB sobrevive a updateApp) =
   ok('run sobre base com schema antigo', rr.status === 200, JSON.stringify(bb).slice(0, 200));
   ok('triagem regravada no formato novo', bb.totalPending === 1058, bb.totalPending);
   rr = await c2('/api/health'); bb = await j(rr);
-  ok('schema marcado na versao atual', bb.schemaVersion === 5, bb.schemaVersion);
+  ok('schema marcado na versao atual', bb.schemaVersion === 7, bb.schemaVersion);
   const q = await j(await c2('/api/queue?acao=BLOQUEAR&limite=50'));
   ok('linha velha some apos migracao', q.every(x => x.action !== 'VELHO') && q.length === EXP.byAction.BLOQUEAR, q.length);
 }

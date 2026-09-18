@@ -159,6 +159,8 @@ proteger. Ele tira do humano tudo que não é a decisão; a decisão continua hu
 E eu vou além: **nenhum sinal de fila sobrevive à correção de Bonferroni** (fila zumbi tem
 2 recusas em 38, ticket de teste 2 em 25 — p ajustado 0,55 e 0,26). Os únicos que sobrevivem
 são os três da seção 5, que são justamente os que ordenam a fila.
+E não é escolha de teste severo: Holm e Benjamini-Hochberg reprovam os dois sinais
+igualmente (0,26 no melhor caso).
 
 Isso não é defeito escondido, é a tese: **"recusado" não é gabarito.** Numa base onde 99,15%
 das decisões são "aprovar", o rótulo mede o que o carimbo deixou passar, não o que deveria ter
